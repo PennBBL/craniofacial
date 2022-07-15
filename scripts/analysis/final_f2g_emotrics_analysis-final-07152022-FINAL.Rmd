@@ -63,10 +63,27 @@ if (!requireNamespace("gridExtra")) {
 if (!requireNamespace("grid")) {
   install.packages("grid")
 }
+if (!requireNamespace("lmtest")) {
+  install.packages("lmtest")
+}
+if (!requireNamespace("ResourceSelection")) {
+  install.packages("ResourceSelection")
+}
+if (!requireNamespace("rJava")) {
+  install.packages("rJava")
+}
+if (!requireNamespace("Deducer")) {
+  install.packages("Deducer")
+}
+if (!requireNamespace("nnet")) {
+  install.packages("nnet")
+}
 if (!requireNamespace("ggpattern")) {
   install.packages("remotes")   # Install remotes package
   remotes::install_github("coolbutuseless/ggpattern")
 }
+
+
 library(tidyverse)
 library(kableExtra)
 library(knitr)
@@ -87,6 +104,11 @@ library(car)
 library(emmeans)
 library(dplyr)
 library(ggpattern)
+library(lmtest)
+library(ResourceSelection)
+# library(rJava)
+# library(Deducer)
+library(nnet)
 webshot::install_phantomjs()
 ```
 
@@ -804,6 +826,22 @@ The remaining results on this section show effects on PC2 with and without adjus
 #### PC1
 
 PC1 between 22q+PS 22q-PS are not significantly different.
+
+```{r, echo=FALSE}
+report.t = function(res.t, x, y){
+  #' Report t-test in apa format
+  #'' TODO: to fully automate: print groups from data.name, bonus: add formatting/substutions of var.name as parameter
+  #' Make this work for a single test (check input is list)
+
+    cat(sprintf("\n - %s (*M* = %s, *SD* = %s) and %s (*M* = %s, *SD* = %s), %s", 
+            x,
+            round(mean(res.t$data$x), 3), round(sd(res.t$data$x), 3),
+            y,
+            round(mean(res.t$data$y), 3), round(sd(res.t$data$y), 3),
+            apa::apa(res.t, print = FALSE)), 
+        sep="\n")
+}
+```
 
 ```{r}
 patho_df = df[, c("bbl_id", "DSM Dx", "PS")] 
@@ -3219,6 +3257,25 @@ Philtrum and brow height are correlated with 22q PC3.
 cor.mat = cor_pc2(emo_df[emo_df$group == '22q',], rois)
 cor.mat %>% t() %>% kable(format = 'html') %>%  kable_styling("striped", full_width = TRUE)
 sig.emotrics = names(which(cor.mat[2,] < .05))
+
+cor.mat = kable(t(cor.mat),
+      booktabs = T,  
+      align = c(rep('c', 6))) %>%
+  kable_classic(full_width = F, 
+                html_font = "Cambria", 
+                font_size =10) %>%
+  kable_styling(latex_options = "HOLD_position",) %>%
+  footnote(general="",
+           general_title = "22q11DS PC and Emotrics correlation")
+
+save_kable(cor.mat, file = file.path(project, 'tables', 
+                                     '22q_pc_emotrics_correlation.html'))
+
+webshot::webshot(file.path(project, 'tables', 
+                           '22q_pc_emotrics_correlation.html'), 
+        file.path(project, 'tables', '22q_pc_emotrics_correlation.pdf'))
+
+cor.mat
 ```
 
 ## TD Not used
@@ -3229,6 +3286,25 @@ Brow Height is correlated with TD PC3.
 cor.mat = cor_pc2(emo_df[emo_df$group == 'TD', ], rois)
 cor.mat %>% t() %>% kable(format = 'html') %>%  kable_styling("striped", full_width = TRUE)
 sig.emotrics = names(which(cor.mat[2,] < .05))
+
+cor.mat = kable(t(cor.mat),
+      booktabs = T,  
+      align = c(rep('c', 6))) %>%
+  kable_classic(full_width = F, 
+                html_font = "Cambria", 
+                font_size =10) %>%
+  kable_styling(latex_options = "HOLD_position",) %>%
+  footnote(general="",
+           general_title = "TD PC and Emotrics correlation")
+
+save_kable(cor.mat, file = file.path(project, 'tables', 
+                                     'td_pc_emotrics_correlation.html'))
+
+webshot::webshot(file.path(project, 'tables', 
+                           'td_pc_emotrics_correlation.html'), 
+        file.path(project, 'tables', 'td_pc_emotrics_correlation.pdf'))
+
+cor.mat
 ```
 
 ## PS Not used
@@ -3239,6 +3315,25 @@ None of the features are correlated with the PS 22q
 cor.mat = cor_pc2(emo_df[emo_df$group == 'PS', ], rois)
 cor.mat %>% t() %>% kable(format = 'html') %>%  kable_styling("striped", full_width = TRUE)
 sig.emotrics = names(which(cor.mat[2,] < .05))
+
+cor.mat = kable(t(cor.mat),
+      booktabs = T,  
+      align = c(rep('c', 6))) %>%
+  kable_classic(full_width = F, 
+                html_font = "Cambria", 
+                font_size =10) %>%
+  kable_styling(latex_options = "HOLD_position",) %>%
+  footnote(general="",
+           general_title = "PS PC and Emotrics correlation")
+
+save_kable(cor.mat, file = file.path(project, 'tables', 
+                                     'ps_pc_emotrics_correlation.html'))
+
+webshot::webshot(file.path(project, 'tables', 
+                           'ps_pc_emotrics_correlation.html'), 
+        file.path(project, 'tables', 'ps_pc_emotrics_correlation.pdf'))
+
+cor.mat
 ```
 
 
@@ -3381,7 +3476,6 @@ summary(model2)
 delta.coef<-abs((coef(model2)-coef(model1)[c(6,9)])/coef(model1)[c(6,9)])
 round(delta.coef,3)
 
-library(lmtest)
 lrtest(model1, model2)#model 1 vs model two p=0.19; not different
 
 ```
@@ -3389,21 +3483,19 @@ lrtest(model1, model2)#model 1 vs model two p=0.19; not different
 ```{r}
 model.interactions<-glm(group~Marginal_Reflex_Distance_1+PC2+Marginal_Reflex_Distance_1:PC2,family="binomial", data=ps_td)
 summary(model.interactions)
-library(lmtest)
+
 lrtest(model2,model.interactions)#interaction effect not signifiance (p=0.17); drop interaction term; stick with model2 
 ```
 #goodness of fit b/w model and fitted 
 ```{r}
-library(ResourceSelection)
 hoslem.test(model2$y, fitted(model2)) #model and fitted do not significantly differ (p=.08)
 ```
 #Plot ROC
 ```{r}
 Predprob<-predict(model2, type="response")
-library(Deducer)
+
 a<-rocplot(model2,diag=TRUE,pred.prob.labels=FALSE, prob.label.digits=3, AUC=TRUE)
 
-library(nnet)
 ps_td$TDorNot<-0
 ps_td$TDorNot[ps_td$group=="PS"]<-1
 n<-nrow(ps_td)
