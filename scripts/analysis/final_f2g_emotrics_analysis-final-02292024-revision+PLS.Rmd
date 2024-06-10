@@ -1,0 +1,4570 @@
+---
+title: "Final Analysis Emotrics Accepted"
+author: "Virgilio Gonzenbach & Joelle Jee"
+date: "June 22, 2022"
+output:
+  html_document:
+    toc: yes
+    toc_float: yes
+    theme: spacelab
+  pdf_document:
+    toc: yes
+---
+
+```{r, message=FALSE}
+if (!requireNamespace("tidyverse")) {
+  install.packages("tidyverse")
+}
+if (!requireNamespace("kableExtra")) {
+  install.packages("kableExtra")
+}
+if (!requireNamespace("knitr")) {
+  install.packages("knitr")
+}
+if (!requireNamespace("dplyr")) {
+  install.packages("dplyr")
+}
+if (!requireNamespace("tidyr")) {
+  install.packages("tidyr")
+}
+if (!requireNamespace("ROCR")) {
+  install.packages("ROCR")
+}
+if (!requireNamespace("FactoMineR")) {
+  install.packages("FactoMineR")
+}
+if (!requireNamespace("factoextra")) {
+  install.packages("factoextra")
+}
+if (!requireNamespace("cutpointr")) {
+  install.packages("cutpointr")
+}
+if (!requireNamespace("e1071")) {
+  install.packages("e1071")
+}
+if (!requireNamespace("caret")) {
+  install.packages("caret")
+}
+if (!requireNamespace("pander")) {
+  install.packages("pander")
+}
+if (!requireNamespace("pROC")) {
+  install.packages("pROC")
+}
+if (!requireNamespace("mclust")) {
+  install.packages("mclust")
+}
+if (!requireNamespace("pander")) {
+  install.packages("pander")
+}
+if (!requireNamespace("gridExtra")) {
+  install.packages("gridExtra")
+}
+if (!requireNamespace("grid")) {
+  install.packages("grid")
+}
+if (!requireNamespace("lmtest")) {
+  install.packages("lmtest")
+}
+if (!requireNamespace("ResourceSelection")) {
+  install.packages("ResourceSelection")
+}
+if (!requireNamespace("rJava")) {
+  install.packages("rJava")
+}
+if (!requireNamespace("Deducer")) {
+  install.packages("Deducer")
+}
+if (!requireNamespace("nnet")) {
+  install.packages("nnet")
+}
+if (!requireNamespace("ggpattern")) {
+  install.packages("remotes")   # Install remotes package
+  remotes::install_github("coolbutuseless/ggpattern")
+}
+if (!requireNamespace("patternplot")) {
+  install.packages("patternplot") 
+} 
+
+if (!requireNamespace("mdatools")) {
+  install.packages("mdatools") 
+}
+
+
+library(tidyverse)
+library(kableExtra)
+library(knitr)
+library(tidyr)
+library(ROCR)
+library(FactoMineR)
+library(factoextra)
+library(cutpointr)
+library(e1071)
+library(caret)
+library(pander)
+library(pROC)
+library(mclust)
+library(pander)
+library(gridExtra)
+library(grid)
+library(car)
+library(emmeans)
+library(dplyr)
+library(ggpattern)
+library(lmtest)
+library(ResourceSelection)
+library(patternplot)
+library(rJava)
+# library(Deducer)
+library(nnet)
+webshot::install_phantomjs()
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+# read csv file that only has the subjects that have both emotrics and f2g data
+project = file.path(fs::path_home(), 'Library/CloudStorage/Box-Box/Craniofacial Study/final_emotrics_f2g_analysis')
+
+# find the latest file/directory
+find_latest <- function(dir) {
+  files = list.files(dir)
+  files = gsub("F2G", "", files) %>%
+    gsub("\\D", "", .) %>% 
+    as.Date('%m%d%y')
+  
+  latest = sort(files, decreasing = TRUE)[1]
+  latest = format(latest, '%m%d%y')
+  
+}
+
+# load data
+latest = find_latest(file.path(project, 'tables', 'Emotrics_F2G'))
+df = read.csv(file.path(project, 'tables', 'Emotrics_F2G', latest,
+                              paste0('penn_chop_tp1_f2g_emotrics_passed_clean_',
+                                     latest, '.csv')),
+                    check.names = FALSE)
+sz_cr = read.csv(file.path(project, 'tables', 'Emotrics_F2G', latest,
+                           paste0('penn_szcr_chop_tp1_wideV_f2g_',
+                                  latest, '.csv')))
+sz_cr = sz_cr[sz_cr$group != '22q', c('bbl_id', 'group')]
+
+manuscript_out = file.path(project, 'manuscript_analyses',
+                           format(Sys.Date(), "%m%d%y"))
+dir.create(manuscript_out)
+```
+
+# Demographics
+
+Sample sizes:
+
+```{r}
+
+make_demo_table <- function(df, sz_cr, filter_race = NA) {
+  
+  if (!is.na(filter_race)) {
+    df = df %>% filter(race == filter_race)
+  }
+  
+  demo_szcr = merge(df %>% select(bbl_id, race), 
+                    sz_cr %>% select(bbl_id, group))
+  
+  if (!is.na(filter_race)) {
+    demo_szcr %>% filter(race == filter_race)
+    }
+  
+  demo_szcr = demo_szcr %>%
+    filter(group %in% c('SZ', 'CR')) %>%
+    group_by(group) %>%
+    count() %>%
+    spread(group, n) %>%
+    dplyr::mutate(group = 'PS', "SZ / CR" = paste(SZ, CR, sep = ' / ')) %>%
+    select(group, 'SZ / CR')
+  
+  demo_n_age = df %>% 
+    group_by(group) %>%
+    dplyr::summarise(n = n(),
+              age_range = sprintf("%.0f-%.0f", 
+                                  floor(min(age, na.rm = TRUE)), 
+                                  floor(max(age, na.rm = TRUE))),
+              age = sprintf("%.0f \U00B1 %.0f",
+                            mean(age, na.rm = TRUE),
+                            sd(age, na.rm = TRUE)))
+  
+  demo_sex = df %>% 
+    group_by(group, sex) %>%
+    count() %>%
+    spread(sex, n) %>%
+    dplyr::mutate("F / M" = paste(F, M, sep = " / ")) %>%
+    select(group, 'F / M')
+  
+  # demo_race = df %>%
+  #   group_by(group, race) %>%
+  #   count()
+  # 
+  # 
+  # demo_race_other = demo_race[!demo_race$race %in% c("White", "Black/African American"), ]
+  # 
+  # demo_race_other  = aggregate(demo_race_other$n, 
+  #                              by=list(Category = demo_race_other$group), 
+  #                              FUN=sum) %>%
+  #   rename(group = Category, Other = x)
+  # 
+  # demo_race = demo_race[c(demo_race$race %in% c("White", "Black/African American")),] %>%
+  #   spread(race, n) %>% merge(demo_race_other)
+  
+  if (is.na(filter_race)) {
+    demo_race = df %>% 
+      dplyr::mutate(race = sapply(race, function(x) {
+        ifelse(x %in% c("White", "Black/African American"), 
+               x, 
+               "Other")})) %>%
+      group_by(group, race) %>%
+      count() %>%
+      spread(race, n) %>%
+      dplyr::mutate("Black/African American / White / Other" = paste(`Black/African American`, 
+                                                              White,
+                                                              Other,
+                                                              sep = " / ")) %>%
+      select(group, "Black/African American / White / Other")
+  }
+  
+  demo_fsiq = df %>%
+    group_by(group) %>%
+    dplyr::summarise(FSIQ = sprintf("%.3f \U00B1 %.3f",
+                             mean(FSIQ, na.rm = TRUE),
+                             sd(FSIQ, na.rm = TRUE)))
+  
+  demo_fsiq$FSIQ[demo_fsiq$group != '22q'] = NA
+  
+  demo_del = df %>%
+    group_by(group, `A-D Present`) %>%
+    count()
+  
+  demo_del$n[demo_del$group != '22q'] = NA
+  
+  if (!0 %in% demo_del$`A-D Present`) {
+    demo_del = rbind(demo_del, tibble("group"="22q", "A-D Present" = 0, "n" = 0))
+  }
+  
+  demo_del = demo_del %>% spread(`A-D Present`, n) %>%
+    rename('Full A-D Deletion' = '1', 'Partial A-D Deletion' = '0') %>%
+    select('Full A-D Deletion', 'Partial A-D Deletion') %>%
+    filter(group == '22q') %>%
+    dplyr::mutate('A-D Deletion' = 100 * round(`Full A-D Deletion` / (`Full A-D Deletion` +  `Partial A-D Deletion`), 2)) %>%
+    dplyr::mutate('A-D Deletion' = paste0(`A-D Deletion`, '%')) %>%
+    select(group, 'A-D Deletion')
+  
+  demo_dsmdx = df %>%
+    group_by(group, `DSM Dx`) %>%
+    count()
+  
+  demo_dsmdx$n[demo_dsmdx$group != '22q'] = NA
+  demo_dsmdx = demo_dsmdx %>% spread(`DSM Dx`,  n) %>%
+    rename('DSM DX' = '1', 'non-DSM DX' = '0') %>%
+    select('DSM DX', 'non-DSM DX')
+  
+  demo_ps = df %>%
+    group_by(group, PS) %>%
+    count()
+  
+  demo_ps$n[demo_ps$group != '22q'] = NA
+  demo_ps = demo_ps %>% spread(PS, n) %>%
+    rename('PS' = '1', 'non-PS' = '0') %>%
+    select('PS', 'non-PS')
+  
+  
+  demo_gaf_mmse = df %>%
+    group_by(group) %>%
+    dplyr::summarise(GAF= sprintf("%.0f \U00B1 %.0f",
+                           mean(GAF_C, na.rm = TRUE),
+                           sd(GAF_C, na.rm = TRUE)),
+              MMSE = sprintf("%.0f \U00B1 %.0f",
+                             mean(MMSE, na.rm = TRUE),
+                             sd(MMSE, na.rm = TRUE)))
+  
+  if (is.na(filter_race)) {
+    demo_table = demo_n_age %>%
+      merge(demo_szcr, all.x = TRUE) %>%
+      merge(demo_sex) %>%
+      merge(demo_race) %>%
+      merge(demo_gaf_mmse) %>%
+      merge(demo_del, all = TRUE) %>%
+      #merge(demo_fsiq) %>%
+      #merge(demo_dsmdx) %>%
+      #merge(demo_ps) %>%
+      rename(Group = group, N = n, Age = age, 'Age Range' = age_range)
+  } else {
+    demo_table = demo_n_age %>%
+      merge(demo_szcr, all.x = TRUE) %>%
+      merge(demo_sex) %>%
+      merge(demo_gaf_mmse) %>%
+      merge(demo_del, all = TRUE) %>%
+      rename(Group = group, N = n, Age = age, 'Age Range' = age_range)
+  }
+  
+  demo_per = df %>%
+    group_by(group) %>%
+    dplyr::summarise(total = n(),
+              age = sum(is.na(age)),
+              sex = sum(is.na(sex)),
+              race = sum(is.na(race)),
+              GAF = sum(is.na(GAF_C)),
+              MMSE = sum(is.na(MMSE)),
+              AD = sum(is.na(`A-D Present`)))#,
+  #FSIQ = sum(is.na(FSIQ)),
+  #PS = sum(is.na(PS)),
+  #DSM_DX = sum(is.na(`DSM Dx`)))
+  
+  caption = paste0("Out of ", demo_per$total[demo_per$group == '22q'], 
+                   " 22q11DS subjects, ", demo_per$age[demo_per$group == '22q'],
+                   " were missing age data, ",
+                   demo_per$GAF[demo_per$group == '22q'],
+                   " were missing GAF data, ",
+                   demo_per$MMSE[demo_per$group == '22q'],
+                   " were missing MMSE data. ",
+                   " Out of ", demo_per$total[demo_per$group == 'PS'], 
+                   " PS subjects, ", 
+                   demo_per$GAF[demo_per$group == 'PS'],
+                   " were missing GAF data, and ",
+                   demo_per$MMSE[demo_per$group == 'PS'],
+                   " were missing MMSE data. ",
+                   "Out of ", demo_per$total[demo_per$group == 'TD'], 
+                   " TD subjects, ", demo_per$age[demo_per$group == 'TD'],
+                   " was missing age data, ",
+                   demo_per$GAF[demo_per$group == 'TD'],
+                   " were missing GAF data, and ",
+                   demo_per$MMSE[demo_per$group == 'TD'],
+                   " were missing MMSE data.")
+  
+  
+  
+  demo_table2 = kable(demo_table, 
+                      booktabs = T,  
+                      align = c(rep('c', 6))) %>%
+    kable_classic(full_width = F, 
+                  html_font = "Cambria", 
+                  font_size =10) %>%
+    kable_styling(latex_options = "HOLD_position",) %>%
+    footnote(general = caption,
+             general_title = "Table"
+    )
+  
+  demo_table$Group[demo_table$Group == '22q'] = '22q11DS'
+  
+  demo_table2 = kable(demo_table,
+                      booktabs = T,  
+                      align = c(rep('c', 6))) %>%
+    kable_classic(full_width = F, 
+                  html_font = "Cambria", 
+                  font_size =10) %>%
+    kable_styling(latex_options = "HOLD_position",) %>%
+    footnote(general = caption,
+             general_title = "Table")
+  
+  return(demo_table2)
+}
+
+```
+
+```{r}
+demo_table2 = make_demo_table(df, sz_cr)
+save_kable(demo_table2, file = file.path(manuscript_out, 'demo_table.html'))
+webshot::webshot(file.path(manuscript_out, 'demo_table.html'),
+                 file.path(manuscript_out, 'demo_table.pdf'))
+
+demo_table2
+```
+
+```{r, echo=FALSE}
+rm(demo_del)
+rm(demo_dsmdx)
+rm(demo_fsiq)
+rm(demo_gaf_mmse)
+rm(demo_n_age)
+rm(demo_ps)
+rm(demo_race)
+rm(demo_race_other)
+rm(demo_sex)
+rm(demo_szcr)
+```
+
+## Black Demographics table
+
+```{r}
+black_demo = make_demo_table(df, sz_cr, "Black/African American")
+save_kable(black_demo, file = file.path(manuscript_out, 'demo_table_black.html'))
+webshot::webshot(file.path(manuscript_out, 'demo_table_black.html'),
+                 file.path(manuscript_out, 'demo_table_black.pdf'))
+
+```
+
+
+## White Demographics table
+
+```{r}
+white_demo = make_demo_table(df, sz_cr, "White")
+save_kable(white_demo, file = file.path(manuscript_out, 'demo_table_white.html'))
+webshot::webshot(file.path(manuscript_out, 'demo_table_white.html'),
+                 file.path(manuscript_out, 'demo_table_white.pdf'))
+
+white_demo
+```
+
+
+## A-D vs none A-D Deletion Demographics comparison
+
+### Age range
+
+```{r}
+ad_demo = df %>% 
+  filter(group == '22q') %>%
+  select(`A-D Present`, age, sex) %>%
+  group_by(`A-D Present`) %>%
+  dplyr::summarise(`Female/Male` = paste(sum(sex == "F"), '/', sum(sex == "M")),
+            age_range = paste(min(age, na.rm = TRUE), ' - ', max(age, na.rm = TRUE)),
+            mean = mean(age, na.rm = TRUE),
+            sd = sd(age, na.rm = TRUE),
+            missing_age = sum(is.na(age))) %>%
+  kable(booktabs = T,  
+        align = c(rep('c', 6))) %>%
+  kable_classic(full_width = F, 
+                html_font = "Cambria", 
+                font_size =10) %>%
+  kable_styling(latex_options = "HOLD_position",)
+
+save_kable(ad_demo, file = file.path(manuscript_out, 'demo_table_ad.html'))
+webshot::webshot(file.path(manuscript_out, 'demo_table_ad.html'),
+                 file.path(manuscript_out, 'demo_table_ad.pdf'))
+
+ad_demo
+
+```
+
+
+```{r}
+set.seed(20221209)
+
+ad_score = df %>%
+  filter(group == '22q') %>%
+  select(`A-D Present`, `22q11.2 deletion syndrome`, sex, age)
+
+non_ad_mean = mean(ad_score$`22q11.2 deletion syndrome`[ad_score$`A-D Present` == 0],
+                   na.rm = TRUE)
+ad_mean = mean(ad_score$`22q11.2 deletion syndrome`[ad_score$`A-D Present` == 1],
+               na.rm = TRUE)
+
+original_diff = non_ad_mean - ad_mean
+
+original_diff
+
+#Permutation test
+permutation.test <- function(treatment, outcome, n){
+  distribution=c()
+  result=0
+  for(i in 1:n){
+    distribution[i]=diff(by(outcome, sample(treatment, length(outcome), FALSE), mean))
+  }
+  return(distribution)
+  # result=sum(abs(distribution) >= abs(original))/(n)
+  # return(list(result, distribution))
+}
+
+
+test1 <- permutation.test(ad_score$`22q11.2 deletion syndrome`[ad_score$`A-D Present` == 1], 
+                          ad_score$`22q11.2 deletion syndrome`[ad_score$`A-D Present` == 0], 
+                          1000)
+hist(test1, breaks=50, col='grey', main="Permutation Distribution", las=1, xlab='')
+```
+
+
+# Demographic comparisons between groups
+
+```{r}
+#write out final dataframe:
+
+write.csv(df, "~/Library/CloudStorage/Box-Box/Craniofacial Study/final_emotrics_f2g_analysis/manuscript_analyses/data.csv", row.names = TRUE) 
+#age
+anova(lm(age ~ group, df))
+pairwise.t.test(df$age, df$group, p.adjust.method="fdr")
+
+#race
+race2<-NA
+race2[df$race=="White"] <- "White"
+race2[df$race=="Black/African American"] <- "Black"
+race2[df$race=="More than one race"] <- "Other"
+race2[df$race=="Asian"] <- "Other"
+race2[df$race=="Hispanic/Latino"] <- "Other"
+race2[df$race=="Other"] <- "Other"
+race2[df$race=="Mixed"] <- "Other"
+
+#black & white df only dataframe
+df_bw_only<-df[df$race2 !="Other", ]
+
+table(df$group, race2)
+chisq.test(df$group,race2, correct=FALSE)
+
+#sex
+table(df$group, df$sex)
+chisq.test(df$group,df$sex, correct=FALSE)
+
+anova(lm(df$GAF_C ~ df$group))
+pairwise.t.test(df$GAF_C, df$group, p.adjust.method="fdr")
+
+anova(lm(df$MMSE ~ df$group))
+pairwise.t.test(df$MMSE, df$group, p.adjust.method="fdr")
+
+df<-cbind(df[,c(1:9)], race2, df[,c(10:334)])
+
+```
+
+```{r, fig.width=6, fig.height=4}
+#age plot
+ggplot(df %>% rename(Group = group, Age = age), 
+       aes(x=Group, y=Age, color=Group)) +
+  geom_point() +
+  scale_color_manual(values = c('orange', 'pink', 'sky blue')) +
+  xlab('Group') +
+  ylab('Age') +
+  ggtitle('Age by Group') +
+  theme_light() +
+  theme(plot.title = element_text(size=15, hjust = 0.5),
+        axis.text.x = element_text(size = 12),
+        axis.text.y = element_text(size = 12),
+        axis.title.y = element_text(size = 15),
+        axis.title.x = element_text(size = 15),
+        legend.title = element_text(size = 15),
+        legend.text = element_text(size = 12))
+  
+```
+
+
+# Average 22q11.2DS gestalt score across groups
+
+```{r}
+#22q Gestalt Scores
+source("~/Dropbox/R/summary_se_function.R")
+Gestalt22q11DS<- summarySE(data=df,measurevar="22q11.2 deletion syndrome",groupvars="group",na.rm=T)
+fit<-(lm(`22q11.2 deletion syndrome` ~ group+age+sex+race2, df))
+Anova(fit, type ="III")
+#no interaction b/w group and race on 22q11 Gestalt score.
+em_22qGestalt <- emmeans(fit, pairwise ~ group, adjust="fdr")[[2]]
+em_22qGestalt
+pairwise.t.test(df$`22q11.2 deletion syndrome`, df$group, p.adjust.method="fdr")
+
+#black vs white 22q Gestalt score
+source("~/Dropbox/R/summary_se_function.R")
+Gestalt22q11DS_bw<- summarySE(data=df_bw_only, measurevar="22q11.2 deletion syndrome", groupvars=c("group","race2"), na.rm=T)
+#summarySE(data=pro.longitudinal, measurevar="age",groupvars=c("mmse_timepoint", "age"),na.rm=T) #time1:16.4, #time2:18.5
+fit2<-(lm(`22q11.2 deletion syndrome` ~ group*race2+age+sex, df_bw_only))
+Anova(fit2, type ="III")
+
+em_22qGestalt_bw <- emmeans(fit2, pairwise ~ group, adjust="fdr")[[2]]
+em_22qGestalt_bw
+pairwise.t.test(df_bw_only$`22q11.2 deletion syndrome`, df_bw_only$group, p.adjust.method="fdr")
+
+```
+
+## Across all subjects
+
+```{r}
+fig1a<-df %>%
+  #rename(Groups = group) %>%
+  #select(Groups, `22q11.2 deletion syndrome`) %>%
+  #rename('Average 22q11DS Gestalt Score' = `22q11.2 deletion syndrome`) %>%
+  ggplot(aes(x=group, y=`22q11.2 deletion syndrome`, fill=group)) + 
+  geom_boxplot() + 
+  scale_fill_manual(values = c("orange", "pink", "sky blue")) +
+  ggtitle("Group means of 22q11.2 deletion syndrome gestalt score") +
+  theme_light() +
+  theme(plot.title = element_text(hjust = 0.5))
+
+pdf(file=file.path(manuscript_out, 'Figure1a.pdf'))
+fig1a
+dev.off()
+
+```
+
+## Just the Caucasians
+
+```{r}
+fig1a_white= df %>%
+  filter(race == 'White')
+
+fig1a_white = ggplot(fig1a_white, aes(x = group,
+                                      y = `22q11.2 deletion syndrome`,
+                                      fill = group)) +
+  geom_boxplot_pattern(pattern_color = "black", 
+                       pattern_fill = "white", 
+                       pattern = "stripe") +
+  scale_fill_manual(values = c("orange", "pink", "sky blue")) +
+  ggtitle("Group means of 22q11.2 deletion syndrome gestalt score in Caucasians") +
+  theme_light() +
+  theme(plot.title = element_text(hjust = 0.5))
+
+pdf(file=file.path(manuscript_out, 'Figure1a_white.pdf'))
+fig1a_white
+dev.off()
+unique(fig1a_white)
+```
+
+## Black/African Americans
+
+```{r}
+fig1a_black= df %>%
+  filter(race == 'Black/African American')
+
+fig1a_black = ggplot(fig1a_black, aes(x = group,
+                                      y = `22q11.2 deletion syndrome`,
+                                      fill = group)) +
+  geom_boxplot_pattern(pattern_color = "black", 
+                       pattern_fill = "black", 
+                       pattern = "stripe") +
+  scale_fill_manual(values = c("orange", "pink", "sky blue")) +
+  ggtitle("Group means of 22q11.2 deletion syndrome gestalt score in Caucasians") +
+  theme_light() +
+  theme(plot.title = element_text(hjust = 0.5))
+
+pdf(file=file.path(manuscript_out, 'Figure1a_black.pdf'))
+fig1a_black
+dev.off()
+unique(fig1a_black)
+```
+
+## All 3 combined
+
+```{r}
+fig1a_combined = rbind(df %>% mutate(race = 'All'),
+                       df %>% filter(race %in% c('Black/African American',
+                                                 'White')))
+
+fig1a_combined = ggplot(fig1a_combined, 
+                        aes(x = race,
+                            y = `22q11.2 deletion syndrome`,
+                            fill = group)) +
+  geom_boxplot_pattern(pattern_color = c(rep("none", 3), rep("black", 6)), 
+                       pattern_fill = c(rep("none", 3), rep("black",3), rep("white", 3)), 
+                       pattern = c(rep("none", 3), rep("stripe", 3), rep("stripe", 3))) +
+  scale_fill_manual(values = c("orange", "pink", "sky blue")) +
+  ggtitle("Group means of 22q11.2 deletion syndrome gestalt score") +
+  theme_light() +
+  theme(plot.title = element_text(hjust = 0.5))
+
+pdf(file=file.path(manuscript_out, 'Figure1a_combined.pdf'), 10, 5)
+fig1a_combined
+dev.off()
+unique(fig1a_combined)
+```
+
+
+# Frequency of Syndromes and Average Gestalt Scores
+
+## 22q
+
+```{r, echo=FALSE}
+# make function to plot the top 50 syndromes
+plot_top_sydnromes <- function(syndromes_df, group, col) {
+  # copy the syndromes_df and calculate frequency
+  syndromes_freq <- data.frame(syndromes_df, check.names = FALSE)
+  syndromes_freq[syndromes_freq > 0] <- 1
+  syndromes_count <- colSums(syndromes_freq)
+  syndromes_freq <- syndromes_count / nrow(syndromes_freq)
+  
+  # get the gestalt scores
+  syndromes_top50 <- syndromes_freq[syndromes_freq >= 0.50]
+  top50_gestalt <- syndromes_df[, names(syndromes_top50)]
+  top50_gestalt[top50_gestalt == 0] <- NA
+  
+  
+  # get average gestalt score per syndrome
+  top50_avg_w <- colMeans(top50_gestalt, na.rm = TRUE)
+  top50_avg_w <- round(top50_avg_w, 2)
+  top50_avg_w <- tibble(Syndrome = colnames(top50_gestalt),
+                        "Gestalt Score" = top50_avg_w)
+  # get min
+  top50_min_w <- round(apply(top50_gestalt, 2, 
+                             min, na.rm = TRUE), 2)
+  # get max
+  top50_max_w <- round(apply(top50_gestalt, 2, 
+                             max, na.rm = TRUE), 2)
+  
+  # plot
+  tibble(Syndrome = names(syndromes_top50), 
+         Frequency = syndromes_top50) %>%
+    ggplot(aes(x = reorder(Syndrome, Frequency), y = Frequency)) + 
+    geom_bar(position = position_dodge(width = 0.5), 
+             stat = "identity",
+             fill = col,
+             width = 0.8) +
+    # frequency label
+    geom_text(aes(label = round(Frequency, 2)), 
+              vjust = 0.3, hjust = -0.1, size = 4)  + 
+    # gestalt score label
+    geom_text(aes(label = paste("avg=", top50_avg_w$`Gestalt Score`,
+                                ",min=", top50_min_w,
+                                ",max=", top50_max_w,
+                                sep = "")),
+              position = position_stack(vjust = 0.5)) +
+    coord_flip() +
+    theme_light() +
+    ggtitle(paste0("Frequency and Average Gestalt Score of Syndromes in ",
+                   group, " Group")) +
+    theme(plot.title = element_text(hjust = 0.95, size = 15),
+          axis.title.y = element_blank(),
+          axis.text.y = element_text(size = 10, hjust = 0.5))
+  
+}
+```
+
+```{r, fig.width=8, fig.height=3.5}
+
+syndromes_idx = (which(colnames(df) == 'Philtrum') + 1):length(colnames(df))
+syndromes = colnames(df)[syndromes_idx]
+
+chop_syndromes <- df[df$group == '22q', syndromes]
+chop_syndromes <- df[df$group == '22q', syndromes]
+plot_top_sydnromes(chop_syndromes, '22q', 'orange')
+```
+```{r}
+#PDF figure
+SupplementalFigure1<-plot_top_sydnromes(chop_syndromes, '22q', 'orange')
+pdf(file=file.path(manuscript_out, 'SupplementalFigure1.pdf'), 10,10)
+SupplementalFigure1
+dev.off()
+```
+### AD Group
+
+```{r, fig.width=8, fig.height=3.5}
+ad_df <- subset(df, subset = (group=='22q'))
+ad_df <- subset(df, subset = (`A-D Present`==1))
+ad_syndromes <- ad_df[, syndromes]
+plot_top_sydnromes(ad_syndromes, '22q AD Deletion', 'orange')
+Gestalt22q11DS.ad <- summarySE(data=ad_df,measurevar="22q11.2 deletion syndrome",na.rm=T)
+write.csv(ad_df, "~/Library/CloudStorage/Box-Box/Craniofacial Study/final_emotrics_f2g_analysis/manuscript_analyses/ad-f2G-final-df.csv", row.names = TRUE)
+
+```
+#Plot AD
+#PDF figure
+```{r}
+SupplementalFigure_22q_ADonly<-plot_top_sydnromes(ad_syndromes, '22q AD Deletion', 'orange')
+pdf(file=file.path(manuscript_out, 'SupplementalFigure_22q_ADonly.pdf'), 10,10)
+SupplementalFigure_22q_ADonly
+dev.off()
+```
+
+### None-AD Group
+
+```{r, fig.width=8, fig.height=3.5}
+non_ad_df <- subset(df, subset = (group=='22q'))
+non_ad_df <- subset(df, subset = (`A-D Present`==0))
+non_ad_syndromes <- non_ad_df[, syndromes]
+plot_top_sydnromes(non_ad_syndromes, '22q Non-AD Deletion', 'orange')
+Gestalt22q11DS.nonad <- summarySE(data=non_ad_df,measurevar="22q11.2 deletion syndrome",na.rm=T)
+write.csv(non_ad_df, "~/Library/CloudStorage/Box-Box/Craniofacial Study/final_emotrics_f2g_analysis/manuscript_analyses/non_ad-f2G-final-df.csv", row.names = FALSE)
+```
+
+```{r}
+SupplementalFigure_22q_NONADonly<-plot_top_sydnromes(non_ad_syndromes, '22q Non-AD Deletion', 'orange')
+pdf(file=file.path(manuscript_out, 'SupplementalFigure_22q_NONADonly.pdf'), 10,12)
+SupplementalFigure_22q_NONADonly
+dev.off()
+```
+## PS group
+
+```{r, fig.width=7, fig.height=4}
+ps_df <- df[df$group == 'PS',]
+ps_syndromes <- ps_df[, syndromes]
+plot_top_sydnromes(ps_syndromes, 'PS', 'pink')
+```
+#PDF PS
+```{r}
+SupplementalFigure_PS<-plot_top_sydnromes(ps_syndromes, 'PS', 'pink')
+pdf(file=file.path(manuscript_out, 'SupplementalFigure_PS.pdf'), 10,10)
+SupplementalFigure_PS
+dev.off()
+```
+
+## TD group
+
+```{r, fig.width=7, fig.height=4}
+td_df <- df[df$group == 'TD',]
+td_syndromes <- td_df[, syndromes]
+plot_top_sydnromes(td_syndromes, 'TD', 'sky blue')
+```
+#PDF TD
+```{r}
+SupplementalFigure_TD<-plot_top_sydnromes(td_syndromes, 'TD', 'sky blue')
+pdf(file=file.path(manuscript_out, 'SupplementalFigure_TD.pdf'), 10,10)
+SupplementalFigure_TD
+dev.off()
+```
+# ROC analysis of 22q Gestalt Scores predicting 22q Status
+
+```{r}
+# Prep data for ROC
+roc_df = df %>% select(group, `22q11.2 deletion syndrome`)
+roc_df$group = ifelse(df$group == '22q', 1, 0) 
+
+# Run ROC
+pred = prediction(roc_df$`22q11.2 deletion syndrome`, roc_df$group)
+perf = performance(pred, "auc")
+```
+
+```{r, fig.width=12, fig.height=8}
+# Extracting performance metrics
+roc.perf = performance(pred, measure = "tpr", x.measure = "fpr")
+
+
+#plot ROCs to determine cut-off threshold
+#pdf(file='~/Library/CloudStorage/Box-Box/Craniofacial Study/final_emotrics_f2g_analysis/manuscript_analyses/F2g_22q_only_ROC.pdf')
+#ROC_22qF2G_only<-plot(roc_22q_drr, col='blue', print.thres=TRUE)
+#ROC_22qF2G_only
+#dev.off()
+
+# Plot
+plot(roc.perf, main="ROC curve of 22q gestalt score predicting 22q status")
+abline(a=0, b= 1)
+
+#logistic regression
+logit22q<-glm(roc_df$group~roc_df$`22q11.2 deletion syndrome`, family="binomial")
+summary(logit22q)
+
+#pROC
+roc_22q_drr<-roc(roc_df$group, roc_df$`22q11.2 deletion syndrome`)
+roc_22q_drr
+ci(roc_22q_drr, of=c("auc"))
+coords(roc_22q_drr, "best", ret=c("sens", "spec", "ppv", "npv", "accuracy"))
+
+#final plot (figure 1b)
+pdf(file=file.path(manuscript_out, '22qGestaltROC.pdf'))
+plot(roc_22q_drr, col="orange",lwd=3, print.thres.adj=c(1,-1),print.thres.best.method="closest.topleft")
+plot(ci.sp(roc_22q_drr, sensitivities=seq(0, 1, .01)), pch = 21:25, type="shape", border= "#FFCC66", col="#FFCC66")
+lines(roc_22q_drr,col="black")
+
+#legend(.6, .4, legend=c("22q11.2 Deletion Syndrome F2G Gestalt Score"),
+       #col=c("black"), cex=.8,lty=1:1,lwd=2, y.intersp = 1, bty = "n")
+dev.off()
+
+```
+Area Under the Curve (AUC): `r round(perf@y.values[[1]],2)`
+
+
+```{r}
+cp <- cutpointr(roc_df, `22q11.2 deletion syndrome`, group, 
+                method = maximize_metric, metric = sum_sens_spec)
+
+summary(cp)
+```
+
+### ROC analysis of 22q Gestalt Scores predicting 22q Status (A-D Deletion)
+##Not really used
+```{r}
+# Prep data for ROC
+roc_df = df %>% select(group, `A-D Present`, `22q11.2 deletion syndrome`)
+#exclude PS, leave only TD and 22q11DS
+roc_df = roc_df[roc_df$group != 'PS', ]
+# exclude 22q subjects with A.D.Present == 0
+roc_df = roc_df[!(roc_df$`A-D Present` == 0 & roc_df$group == '22q'), ] %>%
+  select(group, `22q11.2 deletion syndrome`)
+roc_df$group = ifelse(roc_df$group == '22q', 1, 0) 
+
+# Run ROC
+pred = prediction(roc_df$`22q11.2 deletion syndrome`, roc_df$group)
+perf = performance(pred, "auc")
+```
+
+```{r, fig.width=12, fig.height=8}
+# Extracting performance metrics
+roc.perf = performance(pred, measure = "tpr", x.measure = "fpr")
+
+# Plot
+plot(roc.perf, main="ROC curve of 22q gestalt score predicting 22q status for non-AD deletion group")
+abline(a=0, b= 1)
+```
+Area Under the Curve (AUC): `r round(perf@y.values[[1]],2)`
+
+
+```{r}
+cp <- cutpointr(roc_df, `22q11.2 deletion syndrome`, group, 
+                method = maximize_metric, metric = sum_sens_spec)
+
+summary(cp)
+
+```
+#AUC is the samefor AD as it is for the whole group. 
+
+
+
+
+
+# PCA (22q)
+
+## Scree
+
+```{r}
+# Exclude columns with only zeros
+get_zero_cols = function(df){
+  num_zeros = df %>% sapply(function(x) x == 0) %>% colSums()
+  prop_zeros = num_zeros / nrow(df)
+  zero_cols = names(which(num_zeros == nrow(df)))
+  return(zero_cols)
+}
+chop_df = df[df$group == '22q', ]
+chop_df = chop_df %>% select(-all_of(get_zero_cols(chop_df)))
+chop_syndromes = colnames(chop_df)[(which(colnames(chop_df) == 'Philtrum') + 1) : ncol(chop_df)]
+resPCA = PCA(chop_df[, chop_syndromes], scale.unit = FALSE, graph = FALSE)
+fviz_screeplot(resPCA) + theme(plot.title = element_text(hjust = 0.5))
+```
+```{r}
+pdf(file=file.path(manuscript_out, 'Scree.pdf'))
+fviz_screeplot(resPCA) + theme(plot.title = element_text(hjust = 0.5))
+dev.off()
+```
+#PLS
+```{r}
+# Exclude columns with only zeros
+get_zero_cols = function(df){
+  num_zeros = df %>% sapply(function(x) x == 0) %>% colSums()
+  prop_zeros = num_zeros / nrow(df)
+  zero_cols = names(which(num_zeros == nrow(df)))
+  return(zero_cols)
+}
+library(dplyr)
+df$deleted_vs_not <- ifelse(df$group=="22q", 0, 1) #create binary groups 22q and NOT-22q
+pls_df = df %>% select(-all_of(get_zero_cols(df)))  #remove any F2G column that has all zeros
+pls_df$group <- as.factor(pls_df$group) #make group (original 3 group column) a factor
+pls_df$deleted_vs_not <- as.factor(pls_df$deleted_vs_not) #make new binary group column a factor
+pls_df$avg_brow_height <- rowMeans(pls_df[28:29])
+pls_df$avg_MRD1 <- rowMeans(pls_df[30:31])
+pls_df$avg_MRD2 <- rowMeans(pls_df[32:33])
+
+#binary group
+c.cal <- pls_df[, 322] #selected deleted vs non-deleted
+#x.cal <- pls_df[, c(35:321, 323:325)] #select all face data (F2G and emotrics)
+x.cal <-pls_df[, 35:321] #F2G only
+#x.cal <-pls_df[, 28:34] #emotrics  only
+set.seed(123)
+install.packages("mdatools")
+library(mdatools)
+install.packages("pls")
+library(pls)
+
+model.est = plsda(x.cal, c.cal, ncomp = 10, cv = 5) #set ncomp = 10 arbitrarily , cv set to 5 arbitrarily; will plot RMSE below to judge ncomp
+
+summary(model.est) #summary of plsda above
+plot(model.est)
+plotRMSE(model.est) #plot RMSE by component; 6 looks good based on RMSE? but seed matters
+
+model.final = plsda(x.cal, c.cal, ncomp = 6, cv = 5)
+summary(model.final)
+plot(model.final)
+plotRMSE(model.final, ny=2)
+plotSensitivity(model.final)
+plotYVariance(model.final)
+plotXLoadings(model.final)
+
+model.final$xloadings
+write.csv(model.final$xloadings, file="~/Library/CloudStorage/Box-Box/Craniofacial Study/final_emotrics_f2g_analysis/manuscript_analyses/pls_loadings_f2G+avgEmotrics.csv", row.names=FALSE)
+write.csv(rownames(model.final$xloadings), file="~/Library/CloudStorage/Box-Box/Craniofacial Study/final_emotrics_f2g_analysis/manuscript_analyses/loadingnames_f2G+avgEmotrics.csv", row.names=FALSE)
+plotXLoadings(model.final)
+
+write.csv(df, "~/Library/CloudStorage/Box-Box/Craniofacial Study/final_emotrics_f2g_analysis/manuscript_analyses/data.csv", row.names = TRUE) 
+
+
+ 
+
+```
+
+# PLS PS vs TD
+
+```{r}
+# Exclude columns with only zeros
+get_zero_cols = function(df){
+  num_zeros = df %>% sapply(function(x) x == 0) %>% colSums()
+  prop_zeros = num_zeros / nrow(df)
+  zero_cols = names(which(num_zeros == nrow(df)))
+  return(zero_cols)
+}
+ps_td_df = df[df$group %in% c('TD', 'PS'), ] 
+ps_td_df = ps_td_df %>% select(-all_of(get_zero_cols(ps_td_df)))
+ps_td_df$group <- as.factor(ps_td_df$group) #make group (original 3 group column) a factor
+ps_td_df$avg_brow_height <- rowMeans(ps_td_df[28:29])
+ps_td_df$avg_MRD1 <- rowMeans(ps_td_df[30:31])
+ps_td_df$avg_MRD2 <- rowMeans(ps_td_df[32:33])
+
+b.cal <- ps_td_df[, 2] #selected deleted vs non-deleted
+d.cal <- ps_td_df[, c(35:282, 284:286)]#select all face data (F2G);28:282 is all face data
+
+model.ps_td = plsda(d.cal, b.cal, ncomp =10 , cv = 5)
+
+summary(model.ps_td)
+plot(model.ps_td)
+plotRMSE(model.ps_td, ny=2)
+
+model.ps_td$xloadings
+write.csv(model.ps_td$xloadings, file="~/Library/CloudStorage/Box-Box/Craniofacial Study/final_emotrics_f2g_analysis/manuscript_analyses/TD_PS_pls_loadings_F2G+Emotrics.csv", row.names=FALSE)
+write.csv(rownames(model.ps_td$xloadings), file="~/Library/CloudStorage/Box-Box/Craniofacial Study/final_emotrics_f2g_analysis/manuscript_analyses/TD_PS_loadingnames_F2G+Emotric.csv", row.names=FALSE)
+plotXLoadings(model.ps_td)
+```
+#PLS 22q+ vs 22q-
+
+```{r}
+# Exclude columns with only zeros
+get_zero_cols = function(df){
+  num_zeros = df %>% sapply(function(x) x == 0) %>% colSums()
+  prop_zeros = num_zeros / nrow(df)
+  zero_cols = names(which(num_zeros == nrow(df)))
+  return(zero_cols)
+}
+deleted_with_without_PS = df[df$PS %in% c(0, 1), ] 
+deleted_with_without_PS = deleted_with_without_PS %>% select(-all_of(get_zero_cols(ps_td_df)))
+deleted_with_without_PS$PS <- as.factor(deleted_with_without_PS$PS)
+
+a.cal <- deleted_with_without_PS[, 22] #selected deleted vs non-deleted
+f.cal <- deleted_with_without_PS[, 35:282] #select all face data (F2G and emotrics)
+
+model.deleted_with_without_PS = plsda(f.cal, a.cal, ncomp = 10 , cv = 5)
+
+summary(model.deleted_with_without_PS)
+plot(model.deleted_with_without_PS)
+plotRMSE(model.deleted_with_without_PS, ny=2)
+
+model.deleted_with_without_PS$xloadings
+write.csv(model.deleted_with_without_PS$xloadings, file="~/Desktop/22qplus_minus_pls_loadings.csv", row.names=FALSE)
+write.csv(rownames(model.deleted_with_without_PS$xloadings), file="~/Desktop/22qplus_minus_loadingnames.csv", row.names=FALSE)
+plotXLoadings(model.deleted_with_without_PS)
+```
+
+
+
+## PCA Loadings
+
+
+```{r, echo = FALSE}
+plot_loading = function(resPCA, dim=1){
+  
+  # Extract metrics from PCA object
+  r = resPCA$var$coord[,dim] / sqrt(resPCA$eig[dim,1])
+
+  filter = r^2 > mean(r^2, na.rm = TRUE) # only include loadings with more than average contributions
+  
+  # Prep data
+  df = data.frame(var=names(r), cor = r, row.names = NULL)[filter, ] %>% drop_na()
+  df = df[order(df$cor, decreasing = TRUE),]
+  df$var = factor(df$var, levels = rev(df$var)) #order before plotting
+  
+  # Plot
+  title = sprintf("PC%s contributions", dim)
+  p = df %>% ggplot(aes(x=var, y=cor)) + geom_col() + coord_flip() + 
+    xlab("Gestalt Score") + ylab("Loading") + ggtitle(title) + 
+    theme_bw() + theme(axis.text.y = element_text(size=10))
+  return(p)
+}
+```
+
+#### PC1
+```{r, fig.width=12, fig.height=8}
+pdf(file=file.path(manuscript_out, 'PC1.pdf'),10,10)
+a<-plot_loading(resPCA, dim=1) +
+  theme_light() +
+  theme(axis.text.y = element_text(size = 13),
+        axis.text.x = element_text(size = 13),
+        axis.title.x = element_text(size = 13),
+        axis.title.y = element_blank(),
+        plot.title = element_text(size = 15, hjust = 0.5))
+a
+dev.off()
+```
+
+
+#### PC2
+
+```{r, fig.width=12, fig.height=8}
+
+pdf(file=file.path(manuscript_out, 'PC2.pdf'),10,10)
+b<-plot_loading(resPCA, dim=2) +
+  theme_light() +
+  theme(axis.text.y = element_text(size = 13),
+        axis.text.x = element_text(size = 13),
+        axis.title.x = element_text(size = 13),
+        axis.title.y = element_blank(),
+        plot.title = element_text(size = 15, hjust = 0.5))
+b
+dev.off()
+```
+
+#### PC3
+
+```{r, fig.width=12, fig.height=8}
+pdf(file=file.path(manuscript_out, 'PC3.pdf'),10,10)
+c<-plot_loading(resPCA, dim=3)
+c
+dev.off()
+```
+
+#### PC4
+
+```{r, fig.width=12, fig.height=8}
+pdf(file=file.path(manuscript_out, 'PC4.pdf'),10,10)
+d<-plot_loading(resPCA, dim=4)
+d
+dev.off()
+```
+
+## Covariate effects on PC scores
+
+### Demographics
+
+There were significant effects of sex, age and race on some PC scores. Age sex and race2 (binary) included in all model. 
+Formula: anova(lm(PC2 ~ sex + age + race2, data=cov_df))
+
+```{r}
+cov_df = data.frame(chop_df[, c("bbl_id", "sex", "age", "race2")], 
+                    PC1 = resPCA$ind$coord[, 1], 
+                    PC2 = resPCA$ind$coord[, 2],
+                    PC3 = resPCA$ind$coord[, 3],
+                    PC4 = resPCA$ind$coord[, 4])
+anova(lm(PC1 ~ sex + age + race2, data=cov_df))
+anova(lm(PC2 ~ sex + age + race2, data=cov_df))
+anova(lm(PC3 ~ sex + age + race2, data=cov_df))
+anova(lm(PC4 ~ sex + age + race2, data=cov_df))
+```
+
+```{r}
+cov_df %>% 
+  ggplot(aes(x=PC1, y=PC2, color = sex)) + 
+  geom_point() + 
+  geom_point(data = cov_df %>% 
+               select(PC1, PC2, sex) %>% 
+               group_by(sex) %>%  
+               summarize_all(mean), size = 4, shape = 17) + 
+  scale_color_manual(values = c("red", "blue")) + 
+  theme_light() +
+  ggtitle("22q-like PC scores for 22q sample coded by sex")
+```
+
+```{r, message=FALSE, warning=FALSE}
+cov_df %>% 
+  ggplot(aes(x=age, y=PC2)) + 
+  geom_point() + 
+  geom_smooth(method='lm') +
+  ggtitle('Age vs 22q PC2') +
+  theme_light() +
+  theme(plot.title = element_text(hjust=0.5))
+```
+
+The remaining results on this section show effects on PC2 with and without adjusting for sex, age, race (see 'adj PC').
+
+### Diagnosis
+
+#### Psychosis
+
+22q patients with psychotic symptoms had significantly higher PC2 scores than 22q patients without psychosis.
+
+#### PC1
+
+PC1 between 22q+PS 22q-PS are not significantly different.
+
+```{r, echo=FALSE}
+report.t = function(res.t, x, y){
+  #' Report t-test in apa format
+  #'' TODO: to fully automate: print groups from data.name, bonus: add formatting/substutions of var.name as parameter
+  #' Make this work for a single test (check input is list)
+
+    cat(sprintf("\n - %s (*M* = %s, *SD* = %s) and %s (*M* = %s, *SD* = %s), %s", 
+            x,
+            round(mean(res.t$data$x), 3), round(sd(res.t$data$x), 3),
+            y,
+            round(mean(res.t$data$y), 3), round(sd(res.t$data$y), 3),
+            apa::apa(res.t, print = FALSE)), 
+        sep="\n")
+}
+```
+
+```{r}
+patho_df = df[, c("bbl_id", "DSM Dx", "PS")] 
+
+#make factors (DRR)
+(patho_df<- patho_df%>%
+  mutate(finaldx = case_when(
+    patho_df$`DSM Dx` == 1 ~ 'YES',
+    patho_df$`DSM Dx` == 0 ~ 'NO'
+  )))
+patho_df$finaldx <-as.factor(patho_df$finaldx)
+
+(patho_df<- patho_df%>%
+  mutate(finalPScat = case_when(
+    patho_df$PS == 1 ~ 'YES',
+    patho_df$PS == 0 ~ 'NO'
+  )))
+patho_df$finalPScat <-as.factor(patho_df$finalPScat)
+patho_df = merge(patho_df, cov_df, by="bbl_id") %>% drop_na()
+
+#PC1
+x = patho_df$PC1[patho_df$finalPScat == "YES"]
+y = patho_df$PC1[patho_df$finalPScat == "NO"]
+report.t(apa::t_test(x, y), "PS=YES", "PS=NO")
+
+##David could not get below to run. Ran above. Made new variables. 
+#test me
+#patho_df = df[, c("bbl_id", "DSM Dx", "PS")] 
+
+# Make factors
+#patho_df$`DSM Dx` = recode(as.factor(patho_df$`DSM Dx`), "1" = “Yes”, "0" = “No”)
+#patho_df$PS = as.factor(recode(patho_df$PS, `1` = "Yes", `0` = "No"))
+#patho_df = merge(patho_df, cov_df, by="bbl_id") %>% drop_na()
+
+#x = patho_df$PC1[patho_df$PS == "Yes"]
+#y = patho_df$PC1[patho_df$PS == "No"]
+#report.t(apa::t_test(x, y), "PS=Yes", "PS=No")
+
+
+
+```
+
+##### PC2
+
+```{r, results='asis'}
+x = patho_df$PC2[patho_df$finalPScat == "YES"]
+y = patho_df$PC2[patho_df$finalPScat == "NO"]
+report.t(apa::t_test(x, y), "PS=YES", "PS=NO")
+
+```
+
+
+##### PC3
+
+```{r, results='asis'}
+x = patho_df$PC3[patho_df$finalPScat == "YES"]
+y = patho_df$PC3[patho_df$finalPScat == "NO"]
+report.t(apa::t_test(x, y), "PS=YES", "PS=NO")
+
+```
+
+##### PC4
+
+```{r, results='asis'}
+x = patho_df$PC4[patho_df$finalPScat == "YES"]
+y = patho_df$PC4[patho_df$finalPScat == "NO"]
+report.t(apa::t_test(x, y), "PS=YES", "PS=NO")
+
+
+
+```
+
+##### adj PC2 comparison for age and sex and race (remains significant)
+
+Adjust PC2 by sex and age.\
+Formula: residuals(lm(PC ~ sex + age, data=path_df)) \
+PC2 between 22q+PS and 22q-PS is still significant after adjusting for sex and age.
+
+```{r, results='asis'}
+AvgPC2<- summarySE(data=patho_df,measurevar="PC2",groupvars="finalPScat",na.rm=T)
+AvgPC2$finalPScat<-as.factor(AvgPC2$finalPScat)
+fit1<-lm(PC2 ~ finalPScat+sex+age + race2, data=patho_df)
+Anova(fit1, type="III")
+
+colors=c("magenta", "gold")
+colors<-factor(colors, levels=c("magenta", "gold"))
+```
+
+#Plot 22q+ (PS) vs 22q- (noPS)
+```{r}
+# qPS_Vs_22qNOPS<-ggplot(data=AvgPC2, aes(x=finalPScat, y=PC2))+
+#   geom_bar( aes(fill = colors),stat="identity", show.legend = FALSE, width = 0.75)+
+#   scale_fill_manual(values=c("#FFCC33", "#FF9933"))+
+#   geom_errorbar(aes(ymin=PC2-sd, ymax=PC2+sd), width=.2,position=position_dodge(.9))+
+#   ylim(-0.35,.35)+
+#   xlab("Groups")+
+#   ylab("PC2 score")+
+#   scale_x_discrete(labels=c("22q11DS-","22q11DS+"))+
+#   theme_minimal()
+patho_df$PS<-factor(patho_df$PS)
+#detach("package:plyr", unload = TRUE)
+qPS_Vs_22qNOPS <- patho_df %>%
+  group_by(PS) %>% 
+  dplyr::summarise(mean = mean(PC2), sd = sd(PC2)) %>%
+  dplyr::mutate(PS = ifelse(PS == 0, "22q11DS-", "22q11DS+")) 
+#patho_df$PS<-factor(patho_df$PS)
+#detach("package:plyr", unload=TRUE)
+#qPS_Vs_22qNOPS <- patho_df %>%
+  #group_by(PS) %>% 
+  #summarise(mean = mean(PC2), sd = sd(PC2)) %>%
+  #dplyr::mutate(PS = ifelse(PSlabel == 0, "22q11DS-", "22q11DS+"))
+
+
+
+
+qPS_Vs_22qNOPS <- ggplot(qPS_Vs_22qNOPS, aes(PS, mean)) + 
+  geom_col_pattern(
+    aes(PS, mean, pattern_fill = PS),
+    pattern_color =  c("white", "pink"),
+    pattern_fill = c("white", "pink"),
+    pattern_size = 1,
+    fill = 'orange',
+    color = 'orange') +
+  geom_errorbar(aes(ymin = mean - sd, ymax = mean + sd), 
+                width = 0.2, position = position_dodge(0.9)) +
+  ylab("PC2 score")+
+  theme_light() +
+  theme(plot.title = element_text(hjust = 0.5, size = 15),
+        axis.title.x = element_blank(),
+        axis.title.y = element_text(size = 25),
+        axis.text.x = element_text(size = 20),
+        axis.text.y = element_text(size = 20),
+        legend.position = "none")
+  
+qPS_Vs_22qNOPS
+  
+```
+#print plot
+```{r}
+pdf(file=file.path(manuscript_out, '22q+_vs_22q-_barplot.pdf'),10,10)
+qPS_Vs_22qNOPS
+dev.off()
+```
+
+```{r, results='asis'}
+adjPC2 = residuals(lm(PC2 ~ sex + age + race2, data=patho_df))
+x = adjPC2[patho_df$finalPScat == "YES"]
+y = adjPC2[patho_df$finalPScat == "NO"]
+report.t(apa::t_test(x, y), "PS=YES", "PS=NO")
+
+
+
+```
+
+```{r}
+## Plot PS
+PC1_vs_PC2_22qPS_vs_22qnoPS<-patho_df %>% select(PC1, PC2, finalPScat) %>% 
+  ggplot(aes(x=PC1, y=PC2, color = finalPScat)) + 
+  geom_point() + 
+  geom_point(data = patho_df %>% 
+               select(PC1, PC2, finalPScat) %>% 
+               group_by(finalPScat) %>%  
+               summarize_all(mean), 
+             size = 4, shape = 17) + 
+  stat_ellipse() +
+  scale_color_manual(values = c("magenta", "gold")) + 
+  ggtitle("22q-like PC scores for 22q sample coded by PS status")
+
+PC1_vs_PC2_22qPS_vs_22qnoPS
+```
+```{r}
+pdf(file=file.path(manuscript_out, '22q+_vs_22q-_PC1PC2.pdf'),10,10)
+PC1_vs_PC2_22qPS_vs_22qnoPS
+dev.off()
+```
+
+
+#### DSM Diagnosis (ignore in favor of PS analysis above)
+
+```{r, include=TRUE}
+## Plot DMS Dx
+patho_df %>% 
+  ggplot(aes(x=PC1, y=PC2, color = `finaldx`)) + 
+  geom_point() + 
+  geom_point(data = patho_df %>% select(PC1, PC2, `finaldx`) %>% 
+               group_by(`finaldx`) %>%  
+               summarize_all(mean), 
+             size = 4, shape = 17) + 
+scale_color_manual(values = c("magenta", "gold")) + 
+  ggtitle("22q-like PC scores for 22q sample coded by DSM Dx")
+```
+
+There was no effect of having a confirmed DSM diagnosis on PC2 scores--Sample size low in the DSMDX = YES group
+
+## Testing for differences between TD and PS
+
+### 22q-like factor scores
+
+For the Penn sample (i.e. PS and TD groups),  factor scores are computed using the loadings shown above as weights in a linear combination of the relevant gestalt scores.
+
+**Note:** any reference to PCs/factor scores from this point refers to those computed for the Penn sample. 
+
+```{r}
+get_loadings = function(resPCA, dim=1){
+  # Extract metrics from PCA object
+  r = resPCA$var$coord[,dim] / sqrt(resPCA$eig[dim,1])
+  
+  # is equal to 
+  return(r)
+}
+weigh_scores = function(df, coefs){
+  #' Returns a linear combination of named scores included in 'coefs' 
+  #' If named scores in coefs are not defined in df, columns are initialized with 0
+  
+  # which gestalt scores are missing from penn_df? i.e. PS and TD groups
+  nohits = names(coefs)[which(!(names(coefs) %in% colnames(df)))] 
+  df[, nohits] = 0 # set missing to zero to define columns
+  
+  # linear combination of gestalt scores
+  scores.mat = as.matrix(df[, names(coefs)])
+  weighted_score = as.vector(scores.mat %*% coefs)
+  return(weighted_score)
+}
+
+weigh_scores2 = function(df, resPCA){
+  # which gestalt scores are missing from penn_df? i.e. PS and TD groups
+  nohits = rownames(resPCA$var$coord)[which(!(rownames(resPCA$var$coord) %in% colnames(df)))] 
+  df[, nohits] = 0 # set missing to zero to define columns
+   
+  scores.mat = as.matrix(df[, rownames(resPCA$var$coord)]) 
+  weighted_score = scores.mat %*% resPCA$svd$V
+  
+  return(weighted_score)
+}
+```
+
+#### TD vs PS
+
+##### PC1
+
+There is no significant difference between 22q-like factor scores of TD and PS. 
+```{r}
+# penn_df = df[df$group != '22q',]
+# penn_df = penn_df %>% select(!all_of(get_zero_cols(penn_df)))
+# penn_syndromes = colnames(penn_df)[(which(colnames(penn_df) == 'Philtrum') + 1) : ncol(penn_df)]
+# scores_df = data.frame(bbl_id = penn_df$bbl_id,
+#                        group = penn_df$group)
+scores_df = df %>% select(bbl_id, group, age, sex, race2, PS)
+scores_df = data.table::data.table(scores_df)
+scores_df$PC1 = weigh_scores(df,
+                             get_loadings(resPCA, 1))
+# TD = df$group == "TD"
+TD1 = scores_df$group == 'TD'
+PS1 = scores_df$group == "PS"
+
+report.t(apa::t_test(scores_df$PC1[TD1], scores_df$PC1[PS1]), 'TD', 'PS')
+```
+
+
+##### adj PC1 residuals(lm(PC2 ~ sex + age+race2))
+
+Not significant.
+
+```{r, results='asis'}
+#adjPC = merge(scores_df, penn_df[, c("bbl_id", "sex", "age", "race2")])
+adjPC_tdps = data.table::data.table(scores_df %>%
+                               filter(group != '22q'))
+adjPC_tdps = na.omit(adjPC_tdps, cols=c("sex", "age", "race2")) %>%
+  mutate(group = relevel(factor(group), 'TD')) %>%
+  mutate(sex = factor(sex)) %>%
+  mutate(race = factor(race2))
+
+TD2 = adjPC_tdps$group == 'TD'
+PS2 = adjPC_tdps$group == "PS"
+
+adjPC_tdps$adjPC1 = residuals(lm(PC1 ~ sex + age, data=adjPC_tdps))
+res.t = apa::t_test(adjPC_tdps$adjPC1[TD2], 
+                    adjPC_tdps$adjPC1[PS2], var.equal=TRUE)
+report.t(res.t, "TD", "PS")
+```
+
+```{r}
+fit<-lm(PC1 ~ group+sex+age+race2, data=adjPC_tdps)
+Anova(fit, type="III")
+```
+##### PC2
+
+PC2 shows a difference between TD and PS groups.
+
+```{r, results='asis'}
+scores_df$PC2 = weigh_scores(df, get_loadings(resPCA, 2))
+
+# bartlett.test(scores_df$PC2, scores_df$group) # Can assume equalvariance
+res.t = apa::t_test(scores_df$PC2[TD1], scores_df$PC2[PS1], var.equal=TRUE)
+report.t(res.t, "TD", "PS")
+```
+
+```{r}
+supfigx<-scores_df %>% 
+  ggplot(aes(x=PC1, y=PC2, color = group)) + 
+  geom_point() + 
+  geom_point(data = scores_df %>% group_by(group) %>% 
+               summarize_all(mean), 
+             size = 4, shape = 17) + 
+  scale_color_manual(values = c("orange", "pink", "skyblue")) + 
+  ggtitle("22q-like PC Scores")
+```
+```{r}
+pdf(file=file.path(manuscript_out, 'SuppFigPC1PC2.pdf'),10,10)
+supfigx
+dev.off()
+```
+
+##### adj PC2 residuals(lm(PC2 ~ sex + age +race2))
+
+PC2 of TD and PS still significantly differnet after accounting for age & sex.
+
+```{r, results='asis'}
+adjPC_tdps = merge(adjPC_tdps, scores_df)
+
+adjPC_tdps$adjPC2 = residuals(lm(PC2 ~ sex+age+race2, data=adjPC_tdps))
+res.t = apa::t_test(adjPC_tdps$adjPC2[TD2], 
+                    adjPC_tdps$adjPC2[PS2], var.equal=TRUE)
+report.t(res.t, "TD", "PS")
+
+```
+
+
+```{r}
+fit<-lm(PC2 ~ group+sex+age+race2, data=adjPC_tdps)
+Anova(fit, type="III")
+```
+
+##### PC3
+
+PC3 shows a significant difference between TD and PS groups.
+
+```{r, results='asis'}
+scores_df$PC3 = weigh_scores(df, get_loadings(resPCA, 3))
+
+# bartlett.test(scores_df$PC2, scores_df$group) # Can assume equalvariance
+res.t = apa::t_test(scores_df$PC3[TD1], scores_df$PC3[PS1], var.equal=TRUE)
+report.t(res.t, "TD", "PS")
+```
+
+```{r}
+supfigy<-scores_df %>% 
+  ggplot(aes(x=PC2, y=PC3, color = group)) + 
+  geom_point() + 
+  geom_point(data = scores_df %>% group_by(group) %>% 
+               summarize_all(mean), 
+             size = 4, shape = 17) + 
+  scale_color_manual(values = c("orange", "pink", "skyblue")) + 
+  ggtitle("22q-like PC Scores")
+```
+```{r}
+pdf(file=file.path(manuscript_out, 'SuppFigPC2PC3.pdf'),10,10)
+supfigy
+dev.off()
+```
+
+##### adj PC3 residuals(lm(PC2 ~ sex + age +race2))
+After adjusting for sex and age, PC3 still shows a significant difference between TD and PS groups.
+```{r, results='asis'}
+adjPC_tdps = merge(adjPC_tdps, scores_df, 
+                   by = intersect(colnames(scores_df), colnames(adjPC_tdps)))
+# colnames(adjPC_tdps)[colnames(adjPC_tdps) == 'PC2.x'] = 'PC2'
+# adjPC = adjPC %>% select(-PC2.y)
+adjPC_tdps$adjPC3 = residuals(lm(PC3 ~ sex + age +race2, data=adjPC_tdps))
+res.t = apa::t_test(adjPC_tdps$adjPC3[TD2], 
+                    adjPC_tdps$adjPC3[PS2], var.equal=TRUE)
+report.t(res.t, "TD", "PS")
+```
+
+
+```{r}
+fit<-lm(PC3 ~ group+sex+age+race2, data=adjPC_tdps)
+Anova(fit, type="III")
+```
+
+##### PC4
+
+PC4 does not show a significant difference between TD and PS groups.
+
+```{r, results='asis'}
+scores_df$PC4 = weigh_scores(df, get_loadings(resPCA, 4))
+
+# bartlett.test(scores_df$PC2, scores_df$group) # Can assume equalvariance
+res.t = apa::t_test(scores_df$PC4[TD1], scores_df$PC4[PS1], var.equal=TRUE)
+report.t(res.t, "TD", "PS")
+```
+
+
+##### adj PC4 residuals(lm(PC2 ~ sex + age))
+After adjusting for sex and age, PC3 still shows a significant difference between TD and PS groups.
+
+```{r, results='asis'}
+adjPC_tdps = merge(adjPC_tdps, scores_df, 
+                   by = intersect(colnames(scores_df), colnames(adjPC_tdps)))
+# colnames(adjPC_tdps)[colnames(adjPC_tdps) == 'PC2.x'] = 'PC2'
+# adjPC = adjPC %>% select(-PC2.y)
+adjPC_tdps$adjPC4 = residuals(lm(PC4 ~ sex + age +race2, data=adjPC_tdps))
+res.t = apa::t_test(adjPC_tdps$adjPC4[TD2], 
+                    adjPC_tdps$adjPC4[PS2], var.equal=TRUE)
+report.t(res.t, "TD", "PS")
+```
+
+```{r}
+supfigz<-scores_df %>% 
+  ggplot(aes(x=PC3, y=PC4, color = group)) + 
+  geom_point() + 
+  geom_point(data = scores_df %>% group_by(group) %>% 
+               summarize_all(mean), 
+             size = 4, shape = 17) + 
+  scale_color_manual(values = c("orange", "pink", "skyblue")) + 
+  ggtitle("22q-like PC Scores")
+```
+
+```{r}
+pdf(file=file.path(manuscript_out, 'SuppFigPC3PC4.pdf'),10,10)
+supfigz
+dev.off()
+```
+
+```{r}
+fit<-lm(PC4 ~ group+sex+age+race2, data=adjPC_tdps)
+Anova(fit, type="III")
+```
+
+#### TD vs 22q
+
+##### PC1
+
+There is a significant difference between 22q-like factor scores of TD and 22q. 
+```{r, results ='asis'}
+# td_22q_df = df[df$group != 'PS',]
+# scores_td22q_df = data.frame(bbl_id = td_22q_df$bbl_id,
+#                              group = td_22q_df$group)
+# scores_td22q_df$PC1 = weigh_scores(td_22q_df[, syndromes],
+#                              get_loadings(resPCA, 1))
+# TD = scores_td22q_df$group == 'TD'
+# Q = scores_td22q_df$group == "22q"
+
+Q1 = scores_df$group == "22q"
+
+report.t(apa::t_test(scores_df$PC1[TD1], 
+                     scores_df$PC1[Q1]), 
+         'TD', '22q')
+```
+
+##### adj PC1 residuals(lm(PC2 ~ sex + age))
+
+Significant.
+
+```{r, results='asis'}
+# adjPC = merge(scores_df, penn_df[, c("bbl_id", "sex", "age", "race")])
+adjPC = data.table::data.table(scores_df)
+adjPC = na.omit(adjPC, cols=c("sex", "age", "race2")) %>%
+  mutate(group = relevel(factor(group), 'TD')) %>%
+  mutate(sex = factor(sex)) %>%
+  mutate(race = factor(race2))
+
+TD2 = adjPC$group == 'TD'
+Q2 = adjPC$group == "22q"
+
+adjPC$adjPC1 = residuals(lm(PC1 ~ sex + age +race2, data=adjPC))
+res.t = apa::t_test(adjPC$adjPC1[TD2], 
+                    adjPC$adjPC1[Q2], var.equal=TRUE)
+report.t(res.t, "TD", "PS")
+```
+
+```{r}
+fit<-lm(PC1 ~ group+sex+age+race2, data=adjPC[TD2 | Q2])
+Anova(fit, type="III")
+```
+
+
+##### PC2
+
+PC2 shows a difference between TD and 22q groups.
+
+```{r, results='asis'}
+# scores_td22q_df$PC2 = weigh_scores(td_22q_df[, syndromes], 
+#                              get_loadings(resPCA, 2))
+# 
+# # bartlett.test(scores_df$PC2, scores_df$group) # Can assume equalvariance
+# res.t = apa::t_test(scores_td22q_df$PC2[TD], 
+#                     scores_td22q_df$PC2[Q], 
+#                     var.equal=TRUE)
+# report.t(res.t, "TD", "22q")
+
+report.t(apa::t_test(scores_df$PC2[TD1], 
+                     scores_df$PC2[Q1]), 
+         'TD', '22q')
+```
+
+##### adj PC2 residuals(lm(PC2 ~ sex + age))
+
+PC2 of TD and 22q still significantly differnet after accounting for age & sex.
+
+```{r, results='asis'}
+# adjPC_td_22q = merge(adjPC_td_22q, scores_td22q_df[, c('bbl_id', 'PC2')])
+# adjPC_td_22q$adjPC2 = residuals(lm(PC2 ~ sex + age, data=adjPC_td_22q))
+# res.t = apa::t_test(adjPC_td_22q$adjPC2[adjPC_td_22q$group == "TD"], 
+#                     adjPC_td_22q$adjPC2[adjPC_td_22q$group == "22q"], var.equal=TRUE)
+# report.t(res.t, "TD", "22q")
+
+adjPC$adjPC2 = residuals(lm(PC2 ~ sex + age +race2, data=adjPC))
+res.t = apa::t_test(adjPC$adjPC2[TD2], 
+                    adjPC$adjPC2[Q2], var.equal=TRUE)
+report.t(res.t, "TD", "22q")
+```
+
+```{r}
+fit<-lm(PC2 ~ group+sex+age+race2, data=adjPC[TD2 | Q2])
+Anova(fit, type="III")
+```
+
+##### PC3
+
+PC3 does not show a significant difference between TD & 22q
+
+```{r, results='asis'}
+# scores_td22q_df$PC3 = weigh_scores(td_22q_df[, syndromes], 
+#                                    get_loadings(resPCA, 3))
+# 
+# # bartlett.test(scores_df$PC2, scores_df$group) # Can assume equal variance
+# res.t = apa::t_test(scores_td22q_df$PC3[TD], 
+#                     scores_td22q_df$PC3[Q], 
+#                     var.equal=TRUE)
+# report.t(res.t, "TD", "22q")
+
+report.t(apa::t_test(scores_df$PC3[TD1], 
+                     scores_df$PC3[Q1]), 
+         'TD', '22q')
+```
+
+##### adj PC3 residuals(lm(PC2 ~ sex + age))
+After adjusting for sex and age, PC3 still shows a significant difference between TD and 22q.
+```{r, results='asis'}
+# adjPC_td_22q = merge(adjPC_td_22q, scores_td22q_df[, c('bbl_id', 'PC3')])
+# adjPC_td_22q$adjPC3 = residuals(lm(PC3 ~ sex + age, data=adjPC_td_22q))
+# res.t = apa::t_test(adjPC_td_22q$adjPC3[adjPC_td_22q$group == "TD"], 
+#                     adjPC_td_22q$adjPC3[adjPC_td_22q$group == "22q"], 
+#                     var.equal=TRUE)
+# report.t(res.t, "TD", "22q")
+
+adjPC$adjPC3 = residuals(lm(PC3 ~ sex + age +race2, data=adjPC))
+res.t = apa::t_test(adjPC$adjPC3[TD2], 
+                    adjPC$adjPC3[Q2], var.equal=TRUE)
+report.t(res.t, "TD", "22q")
+```
+
+```{r}
+fit<-lm(PC3 ~ group+sex+age+race2, data=adjPC[TD2 | Q2])
+Anova(fit, type="III")
+```
+
+
+##### PC4
+
+PC4 does not show a significant difference between TD and 22q.
+
+```{r, results='asis'}
+# scores_td22q_df$PC3 = weigh_scores(td_22q_df[, syndromes], 
+#                                    get_loadings(resPCA, 3))
+# 
+# # bartlett.test(scores_df$PC2, scores_df$group) # Can assume equal variance
+# res.t = apa::t_test(scores_td22q_df$PC3[TD], 
+#                     scores_td22q_df$PC3[Q], 
+#                     var.equal=TRUE)
+# report.t(res.t, "TD", "22q")
+
+report.t(apa::t_test(scores_df$PC4[TD1], 
+                     scores_df$PC4[Q1]), 
+         'TD', '22q')
+```
+
+##### adj PC4 residuals(lm(PC2 ~ sex + age +race2))
+After adjusting for sex and age, PC4 does  show a significant difference between TD and 22q.
+
+```{r, results='asis'}
+# adjPC_td_22q = merge(adjPC_td_22q, scores_td22q_df[, c('bbl_id', 'PC3')])
+# adjPC_td_22q$adjPC3 = residuals(lm(PC3 ~ sex + age, data=adjPC_td_22q))
+# res.t = apa::t_test(adjPC_td_22q$adjPC3[adjPC_td_22q$group == "TD"], 
+#                     adjPC_td_22q$adjPC3[adjPC_td_22q$group == "22q"], 
+#                     var.equal=TRUE)
+# report.t(res.t, "TD", "22q")
+
+adjPC$adjPC4 = residuals(lm(PC4 ~ sex + age +race2, data=adjPC))
+res.t = apa::t_test(adjPC$adjPC4[TD2], 
+                    adjPC$adjPC4[Q2], var.equal=TRUE)
+report.t(res.t, "TD", "22q")
+```
+
+```{r}
+fit<-lm(PC4 ~ group+sex+age+race2, data=adjPC[TD2 | Q2])
+Anova(fit, type="III")
+```
+
+
+#### 22q vs PS
+
+##### PC1
+
+There is a significant difference between 22q-like factor scores of 22q and PS. 
+```{r}
+# ps_22q_df = df[df$group != 'TD',]
+# scores_ps22q_df = data.frame(bbl_id = ps_22q_df$bbl_id,
+#                              group = ps_22q_df$group)
+# scores_ps22q_df$PC1 = weigh_scores(ps_22q_df[, syndromes],
+#                              get_loadings(resPCA, 1))
+# # TD = df$group == "TD"
+# Q = scores_ps22q_df$group == '22q'
+# PS = scores_ps22q_df$group == "PS"
+# 
+# report.t(apa::t_test(scores_ps22q_df$PC1[Q], 
+#                      scores_ps22q_df$PC1[PS]), 
+#          '22q', 'PS')
+
+report.t(apa::t_test(scores_df$PC1[Q1], 
+                     scores_df$PC1[PS1]), 
+         '22q', 'PS')
+
+```
+
+##### adj PC1 residuals(lm(PC2 ~ sex + age))
+
+Significant.
+
+```{r, results='asis'}
+# adjPC_ps_22q = merge(scores_ps22q_df, 
+#                      ps_22q_df[, c("bbl_id", "sex", "age", "race")])
+# adjPC_ps_22q = na.omit(adjPC_ps_22q)
+# 
+# adjPC_ps_22q$adjPC1 = residuals(lm(PC1 ~ sex + age, data=adjPC_ps_22q))
+# res.t = apa::t_test(adjPC_ps_22q$adjPC1[adjPC_ps_22q$group == "22q"], 
+#                     adjPC_ps_22q$adjPC1[adjPC_ps_22q$group == "PS"], 
+#                     var.equal=TRUE)
+# report.t(res.t, "22q", "PS")
+PS2 = adjPC$group == 'PS'
+
+res.t = apa::t_test(adjPC$adjPC1[Q2], 
+                    adjPC$adjPC1[PS2], var.equal=TRUE)
+report.t(res.t, "TD", "PS")
+```
+
+```{r}
+fit<-lm(PC1 ~ group+sex+age+race2, data=adjPC[Q2 | PS2])
+Anova(fit, type="III")
+```
+
+##### PC2
+
+PC2 does not show a significant difference between 22q and PS groups.
+
+```{r, results='asis'}
+# scores_ps22q_df$PC2 = weigh_scores(ps_22q_df[, syndromes], 
+#                                    get_loadings(resPCA, 2))
+# 
+# # bartlett.test(scores_df$PC2, scores_df$group) # Can assume equalvariance
+# res.t = apa::t_test(scores_ps22q_df$PC2[Q], 
+#                     scores_ps22q_df$PC2[PS], 
+#                     var.equal=TRUE)
+# report.t(res.t, "22q", "PS")
+
+report.t(apa::t_test(scores_df$PC2[Q1], 
+                     scores_df$PC2[PS1]), 
+         '22q', 'PS')
+
+```
+
+##### adj PC2 residuals(lm(PC2 ~ sex + age))
+
+PC2 of 22q and PS are not significantly differenet after accounting for age & sex.
+
+```{r, results='asis'}
+# adjPC_ps_22q = merge(adjPC_ps_22q, scores_ps22q_df[, c('bbl_id', 'PC2')])
+# adjPC_ps_22q$adjPC2 = residuals(lm(PC2 ~ sex + age, data=adjPC_ps_22q))
+# res.t = apa::t_test(adjPC_ps_22q$adjPC2[adjPC_ps_22q$group == "22q"], 
+#                     adjPC_ps_22q$adjPC2[adjPC_ps_22q$group == "PS"], 
+#                     var.equal=TRUE)
+# report.t(res.t, "22q", "PS")
+
+report.t(apa::t_test(adjPC$adjPC2[Q2], 
+                     adjPC$adjPC2[PS2]), 
+         '22q', 'PS')
+```
+
+```{r}
+fit<-lm(PC2 ~ group+sex+age+race2, data=adjPC[Q2 | PS2])
+Anova(fit, type="III")
+```
+
+##### PC3
+
+PC3 shows a significant difference between 22q and PS groups.
+
+```{r, results='asis'}
+# scores_ps22q_df$PC3 = weigh_scores(ps_22q_df[, syndromes], 
+#                                    get_loadings(resPCA, 3))
+# 
+# # bartlett.test(scores_df$PC2, scores_df$group) # Can assume equalvariance
+# res.t = apa::t_test(scores_ps22q_df$PC3[Q], 
+#                     scores_ps22q_df$PC3[PS], 
+#                     var.equal=TRUE)
+# report.t(res.t, "22q", "PS")
+
+report.t(apa::t_test(scores_df$PC3[Q1], 
+                     scores_df$PC3[PS1]), 
+         '22q', 'PS')
+
+```
+
+##### adj PC3 residuals(lm(PC2 ~ sex + age))
+After adjusting for sex and age and race, PC3 does not differ between TD and PS groups.
+```{r, results='asis'}
+# adjPC_ps_22q = merge(adjPC_ps_22q, scores_ps22q_df[, c('bbl_id', 'PC3')])
+# adjPC_ps_22q$adjPC3 = residuals(lm(PC3 ~ sex + age, data=adjPC_ps_22q))
+# res.t = apa::t_test(adjPC_ps_22q$adjPC3[adjPC_ps_22q$group == "22q"], 
+#                     adjPC_ps_22q$adjPC3[adjPC_ps_22q$group == "PS"], 
+#                     var.equal=TRUE)
+# report.t(res.t, "22q", "PS")
+
+report.t(apa::t_test(adjPC$adjPC3[Q2], 
+                     adjPC$adjPC3[PS2]), 
+         '22q', 'PS')
+```
+
+```{r}
+fit<-lm(PC3 ~ group+sex+age+race2, data=adjPC[Q2 | PS2])
+Anova(fit, type="III")
+```
+
+##### PC4
+
+PC4 shows a significant difference between 22q and PS groups.
+
+```{r, results='asis'}
+# scores_ps22q_df$PC3 = weigh_scores(ps_22q_df[, syndromes], 
+#                                    get_loadings(resPCA, 3))
+# 
+# # bartlett.test(scores_df$PC2, scores_df$group) # Can assume equalvariance
+# res.t = apa::t_test(scores_ps22q_df$PC3[Q], 
+#                     scores_ps22q_df$PC3[PS], 
+#                     var.equal=TRUE)
+# report.t(res.t, "22q", "PS")
+
+report.t(apa::t_test(scores_df$PC4[Q1], 
+                     scores_df$PC4[PS1]), 
+         '22q', 'PS')
+
+```
+
+##### adj PC4 residuals(lm(PC2 ~ sex + age))
+After adjusting for sex and age, PC3 still shows a significant difference between TD and PS groups.
+```{r, results='asis'}
+# adjPC_ps_22q = merge(adjPC_ps_22q, scores_ps22q_df[, c('bbl_id', 'PC3')])
+# adjPC_ps_22q$adjPC3 = residuals(lm(PC3 ~ sex + age, data=adjPC_ps_22q))
+# res.t = apa::t_test(adjPC_ps_22q$adjPC3[adjPC_ps_22q$group == "22q"], 
+#                     adjPC_ps_22q$adjPC3[adjPC_ps_22q$group == "PS"], 
+#                     var.equal=TRUE)
+# report.t(res.t, "22q", "PS")
+
+report.t(apa::t_test(adjPC$adjPC4[Q2], 
+                     adjPC$adjPC4[PS2]), 
+         '22q', 'PS')
+```
+
+```{r}
+fit<-lm(PC4 ~ group+sex+age+race2, data=adjPC[Q2 | PS2])
+Anova(fit, type="III")
+```
+
+
+#### 22q+PS vs PS
+
+##### PC1
+
+There is a significant difference between 22q-like factor scores of 22q with PS and PS. 
+```{r}
+Q_PS1 = scores_df$group == '22q' & scores_df$PS == '1'
+report.t(apa::t_test(scores_df$PC1[Q_PS1], 
+                     scores_df$PC1[PS1]), 
+         '22q+PS', 'PS')
+
+```
+
+##### adj PC1 residuals(lm(PC2 ~ sex + age))
+
+Significant.
+
+```{r, results='asis'}
+adjPC_22qPS = data.table::data.table(scores_df %>%
+                                     filter((group == '22q' & PS == 1) | group == 'PS'))
+adjPC_22qPS = na.omit(adjPC_22qPS, cols=c("sex", "age", "race2")) %>%
+  mutate(group = factor(group)) %>%
+  mutate(sex = factor(sex)) %>%
+  mutate(race = factor(race2))
+
+Q_PS2 = adjPC_22qPS$group == '22q' & adjPC_22qPS$PS == 1
+PS2 = adjPC_22qPS$group == 'PS'
+
+adjPC_22qPS$adjPC1 = residuals(lm(PC1 ~ age + sex + race, data = adjPC_22qPS))
+report.t(apa::t_test(adjPC_22qPS$adjPC1[Q_PS2], 
+                     adjPC_22qPS$adjPC1[PS2]), 
+         '22q', 'PS')
+```
+
+```{r}
+fit<-lm(PC1 ~ group+sex+age+race2, data=adjPC_22qPS)
+Anova(fit, type="III")
+
+t.test(adjPC1~group, data=adjPC_22qPS)
+```
+
+
+##### PC2
+
+PC2 are significant difference between 22q+PS and PS groups.
+
+```{r, results='asis'}
+report.t(apa::t_test(scores_df$PC2[Q_PS1], 
+                     scores_df$PC2[PS1]), 
+         '22q+PS', 'PS')
+
+```
+
+##### adj PC2 residuals(lm(PC2 ~ sex + age)) N is wrong for Virgils analysis DO NOT USE
+
+PC2 of 22q+PS and PS are significantly different after accounting for age & sex.
+
+```{r, results='asis'}
+adjPC_22qPS$adjPC2 = residuals(lm(PC2 ~ age + sex + race2, data = adjPC_22qPS))
+report.t(apa::t_test(adjPC$adjPC2[Q_PS2], 
+                     adjPC$adjPC2[PS2]), 
+         '22q+PS', 'PS')
+```
+#No difference in PC2
+```{r}
+fit<-lm(PC2 ~ group+sex+age+race2, data=adjPC_22qPS)
+Anova(fit, type="III")
+
+fit2<-lm(adjPC2 ~group, data=adjPC_22qPS)
+Anova(fit2, type="III")
+
+t.test(adjPC2 ~group, data=adjPC_22qPS)
+```
+
+##### PC3 N is wrong for Virgils analysis DO NOT USE
+
+PC3 shows a significant difference between 22q+PS and PS groups.
+
+```{r, results='asis'}
+
+report.t(apa::t_test(scores_df$PC3[Q_PS1], 
+                     scores_df$PC3[PS1]), 
+         '22q+PS', 'PS')
+
+```
+
+##### adj PC3 residuals(lm(PC2 ~ sex + age))
+After adjusting for sex and age, PC3 still shows a significant difference between 22q+PS and PS groups.
+```{r, results='asis'}
+# adjPC_ps_22q = merge(adjPC_ps_22q, scores_ps22q_df[, c('bbl_id', 'PC3')])
+# adjPC_ps_22q$adjPC3 = residuals(lm(PC3 ~ sex + age, data=adjPC_ps_22q))
+# res.t = apa::t_test(adjPC_ps_22q$adjPC3[adjPC_ps_22q$group == "22q"], 
+#                     adjPC_ps_22q$adjPC3[adjPC_ps_22q$group == "PS"], 
+#                     var.equal=TRUE)
+# report.t(res.t, "22q", "PS")
+
+adjPC_22qPS$adjPC3 = residuals(lm(PC3 ~ age+sex+race, data=adjPC_22qPS))
+report.t(apa::t_test(adjPC$adjPC3[Q_PS2], 
+                     adjPC$adjPC3[PS2]), 
+         '22q+PS', 'PS')
+```
+#No differnece in PC3
+```{r}
+fit<-lm(PC3 ~ group+sex+age+race, data=adjPC_22qPS)
+Anova(fit, type="III")
+```
+
+##### PC4
+
+PC4 does not show a significant difference between 22q and PS groups. N is wrong for Virgils analysis DO NOT USE
+
+```{r, results='asis'}
+
+report.t(apa::t_test(scores_df$PC4[Q_PS1], 
+                     scores_df$PC4[PS1]), 
+         '22q+PS', 'PS')
+
+```
+
+##### adj PC4 residuals(lm(PC4 ~ sex + age))
+After adjusting for sex and age, PC4 are not significant different between TD and PS groups.
+```{r, results='asis'}
+# adjPC_ps_22q = merge(adjPC_ps_22q, scores_ps22q_df[, c('bbl_id', 'PC3')])
+# adjPC_ps_22q$adjPC3 = residuals(lm(PC3 ~ sex + age, data=adjPC_ps_22q))
+# res.t = apa::t_test(adjPC_ps_22q$adjPC3[adjPC_ps_22q$group == "22q"], 
+#                     adjPC_ps_22q$adjPC3[adjPC_ps_22q$group == "PS"], 
+#                     var.equal=TRUE)
+# report.t(res.t, "22q", "PS")
+
+adjPC_22qPS$adjPC4 = residuals(lm(PC4 ~ age+sex+race2, data=adjPC_22qPS))
+report.t(apa::t_test(adjPC$adjPC4[Q_PS2], 
+                     adjPC$adjPC4[PS2]), 
+         '22q+PS', 'PS')
+```
+#PC differs b/w PS and 22q11.2 PS
+```{r}
+fit<-lm(PC4 ~ group+sex+age+race2, data=adjPC_22qPS)
+Anova(fit, type="III")
+```
+
+
+### TD vs PS vs 22q
+
+#### Unadjusted PCs
+
+```{r, fig.width=6, fig.height=4}
+
+# merge the PC and adjusted PC for TD, PS, 22q
+# to_collect = c('bbl_id', 'group', 'sex', 'age',
+#                'PC1', 'PC2', 'PC3', 
+#                'adjPC1', 'adjPC2', 'adjPC2', 'adjPC3')
+# adjPC = rbind(adjPC %>%
+#                 select(to_collect),
+#               adjPC_ps_22q %>%
+#                 filter(group == '22q') %>%
+#                 select(to_collect))
+
+# get mean and sd for PC1&2 by group
+a<-tibble("PC" = c(rep("PC1", 3), rep("PC2", 3), rep("PC3", 3), rep("PC4", 3)),
+       "Group" = rep(c("22q", "TD", "PS"), 4),
+       "Mean" = c(mean(adjPC$PC1[adjPC$group == '22q']), 
+                  mean(adjPC$PC1[adjPC$group == 'TD']), 
+                  mean(adjPC$PC1[adjPC$group == 'PS']),
+                  mean(adjPC$PC2[adjPC$group == '22q']), 
+                  mean(adjPC$PC2[adjPC$group == 'TD']), 
+                  mean(adjPC$PC2[adjPC$group == 'PS']),
+                  mean(adjPC$PC3[adjPC$group == '22q']), 
+                  mean(adjPC$PC3[adjPC$group == 'TD']), 
+                  mean(adjPC$PC3[adjPC$group == 'PS']),
+                  mean(adjPC$PC4[adjPC$group == '22q']), 
+                  mean(adjPC$PC4[adjPC$group == 'TD']), 
+                  mean(adjPC$PC4[adjPC$group == 'PS'])),
+       "SD" = c(sd(adjPC$PC1[adjPC$group == '22q']), 
+                sd(adjPC$PC1[adjPC$group == 'TD']), 
+                sd(adjPC$PC1[adjPC$group == 'PS']),
+                sd(adjPC$PC2[adjPC$group == '22q']),
+                sd(adjPC$PC2[adjPC$group == 'TD']), 
+                sd(adjPC$PC2[adjPC$group == 'PS']),
+                sd(adjPC$PC3[adjPC$group == '22q']),
+                sd(adjPC$PC3[adjPC$group == 'TD']), 
+                sd(adjPC$PC3[adjPC$group == 'PS']),
+                sd(adjPC$PC4[adjPC$group == '22q']),
+                sd(adjPC$PC4[adjPC$group == 'TD']), 
+                sd(adjPC$PC4[adjPC$group == 'PS']))) %>%
+  ggplot(aes(x = PC, y = Mean, fill = Group)) +
+  geom_bar(position = "dodge", stat = "identity") +
+  geom_errorbar(aes(ymin = Mean - SD, ymax = Mean + SD), 
+                width = 0.2, position = position_dodge(0.9)) +
+  scale_fill_manual(values = c("orange", "pink", "sky blue")) +
+  ggtitle("Average PC Scores by Group") +
+  theme_light() +
+  theme(plot.title = element_text(size=15, hjust = 0.5),
+        axis.text.x = element_text(size = 12),
+        axis.text.y = element_text(size = 12),
+        axis.title.y = element_text(size = 15),
+        axis.title.x = element_text(size = 15),
+        legend.title = element_text(size = 15),
+        legend.text = element_text(size = 12))
+
+a
+```
+```{r}
+pdf(file=file.path(manuscript_out, 'PCscoresByGroup.pdf'),10,10)
+a
+dev.off()
+```
+
+##### PC2 ANOVA 
+```{r}
+fit<-(lm(PC1 ~ group + age + sex + race2, 
+         data = adjPC %>%
+           mutate(group = relevel(factor(group), 'TD'))))
+Anova(fit, type="III")
+```
+```{r}
+library(emmeans)
+em_PC1 <- emmeans(fit, pairwise ~ group, adjust="fdr")[[2]]
+em_PC1
+```
+
+formula = (anova(lm(PC2 ~ group)))
+
+```{r}
+anova(lm(PC2 ~ group, 
+         data = adjPC %>%
+           mutate(group = relevel(factor(group), 'TD'))))
+
+```
+
+formula: (anova(lm(PC2 ~ group + age + sex)))
+
+```{r}
+fit<-(lm(PC2 ~ group + age + sex + race2, 
+         data = adjPC %>%
+           mutate(group = relevel(factor(group), 'TD'))))
+Anova(fit, type="III")
+```
+
+#### Adjusted PCs #not used
+
+```{r, fig.width=6, fig.height=4}
+# get mean and sd for PC1&2 by group
+tibble("PC" = c(rep("PC1", 3), rep("PC2", 3), rep("PC3", 3)),
+       "Group" = rep(c("22q", "TD", "PS"), 3),
+       "Mean" = c(mean(adjPC$adjPC1[adjPC$group == '22q']), 
+                  mean(adjPC$adjPC1[adjPC$group == 'TD']), 
+                  mean(adjPC$adjPC1[adjPC$group == 'PS']),
+                  mean(adjPC$adjPC2[adjPC$group == '22q']), 
+                  mean(adjPC$adjPC2[adjPC$group == 'TD']), 
+                  mean(adjPC$adjPC2[adjPC$group == 'PS']),
+                  mean(adjPC$adjPC3[adjPC$group == '22q']), 
+                  mean(adjPC$adjPC3[adjPC$group == 'TD']), 
+                  mean(adjPC$adjPC3[adjPC$group == 'PS'])),
+       "SD" = c(sd(adjPC$adjPC1[adjPC$group == '22q']), 
+                sd(adjPC$adjPC1[adjPC$group == 'TD']), 
+                sd(adjPC$adjPC1[adjPC$group == 'PS']),
+                sd(adjPC$adjPC2[adjPC$group == '22q']),
+                sd(adjPC$adjPC2[adjPC$group == 'TD']), 
+                sd(adjPC$adjPC2[adjPC$group == 'PS']),
+                sd(adjPC$adjPC3[adjPC$group == '22q']),
+                sd(adjPC$adjPC3[adjPC$group == 'TD']), 
+                sd(adjPC$adjPC3[adjPC$group == 'PS']))) %>%
+  ggplot(aes(x = PC, y = Mean, fill = Group)) +
+  geom_bar(position = "dodge", stat = "identity") +
+  geom_errorbar(aes(ymin = Mean - SD, ymax = Mean + SD), 
+                width = 0.2, position = position_dodge(0.9)) +
+  scale_fill_manual(values = c("orange", "pink", "sky blue")) +
+  ggtitle("Average PC Scores by Group") +
+  theme_light() +
+  theme(plot.title = element_text(size=15, hjust = 0.5),
+        axis.text.x = element_text(size = 12),
+        axis.text.y = element_text(size = 12),
+        axis.title.y = element_text(size = 15),
+        axis.title.x = element_text(size = 15),
+        legend.title = element_text(size = 15),
+        legend.text = element_text(size = 12))
+       
+
+```
+
+
+
+#### TD vs SZ
+
+##### PC1
+
+```{r, results='asis'}
+sz_df = merge(sz_cr, 
+              select(adjPC_tdps, !group)) %>%
+  mutate(group = relevel(factor(group), 'TD'))
+# sz_df = merge(sz_df, 
+#               df[, c("bbl_id", "sex", "age")]) %>% 
+#   filter(group != 'CR') %>% 
+#   drop_na()
+
+sz_df1 <- sz_df[!(sz_df$group =="CR"),]
+
+
+res.t = apa::t_test(sz_df[sz_df$group == "TD", "PC1"], 
+                    sz_df[sz_df$group == "SZ", "PC1"], 
+                    var.equal=TRUE)
+report.t(res.t, "TD", "SZ")
+```
+
+There are no variance difference between these two groups.
+
+```{r}
+bartlett.test(sz_df$PC1, sz_df$group) # Can assume equal variance
+```
+
+##### adjPC1 (residuals(lm(PC1 ~ sex + age)))
+
+```{r, results='asis'}
+# sz_df$adjPC2 = residuals(lm(PC2 ~ sex + age, data=sz_df))
+res.t = apa::t_test(sz_df$adjPC1 [sz_df$group == "TD"], 
+                    sz_df$adjPC1 [sz_df$group == "SZ"], 
+                    var.equal=TRUE)
+report.t(res.t, "TD", "SZ")
+```
+
+There are no variance difference between these two groups.
+
+```{r}
+bartlett.test(sz_df$adjPC1, sz_df$group) # Can assume equal variance
+```
+
+
+```{r}
+fit<-lm(PC1 ~ group+sex+age+race2, data=sz_df1)
+Anova(fit, type="III")
+```
+
+##### PC2
+
+Differences remain when comparing TD only to SZ. 
+
+```{r, results='asis'}
+# sz_df = merge(sz_df, 
+#               df[, c("bbl_id", "sex", "age")]) %>% 
+#   filter(group != 'CR') %>% 
+#   drop_na()
+
+res.t = apa::t_test(sz_df[sz_df$group == "TD", "PC2"], 
+                    sz_df[sz_df$group == "SZ", "PC2"], 
+                    var.equal=TRUE)
+report.t(res.t, "TD", "SZ")
+```
+
+There are no variance difference between these two groups.
+
+```{r}
+bartlett.test(sz_df$PC2, sz_df$group) # Can assume equal variance
+```
+
+##### adjPC2 (residuals(lm(PC2 ~ sex + age)))
+
+```{r, results='asis'}
+# sz_df$adjPC2 = residuals(lm(PC2 ~ sex + age, data=sz_df))
+res.t = apa::t_test(sz_df$adjPC2 [sz_df$group == "TD"], 
+                    sz_df$adjPC2 [sz_df$group == "SZ"], 
+                    var.equal=TRUE)
+report.t(res.t, "TD", "SZ")
+```
+
+There are no variance difference between these two groups.
+
+```{r}
+bartlett.test(sz_df$adjPC2, sz_df$group) # Can assume equal variance
+```
+
+
+```{r}
+fit<-lm(PC2 ~ group+sex+age+race2, data=sz_df1)
+Anova(fit, type="III")
+```
+
+Differences remain when comparing TD only to SZ. 
+
+##### PC3
+
+PC3 different for TD and SZ.
+
+```{r, results='asis'}
+res.t = apa::t_test(sz_df[sz_df$group == "TD", "PC3"], 
+                    sz_df[sz_df$group == "SZ", "PC3"], 
+                    var.equal=TRUE)
+report.t(res.t, "TD", "SZ")
+```
+
+There are no variance difference between these two groups.
+
+```{r}
+bartlett.test(sz_df$PC3, sz_df$group) # Can assume equal variance
+```
+
+##### adjPC3 (residuals(lm(PC2 ~ sex + age)))
+
+PC3 still significant for TD vs SZ.
+
+```{r, results='asis'}
+# sz_df$adjPC3 = residuals(lm(PC3 ~ sex + age, data=sz_df))
+res.t = apa::t_test(sz_df$adjPC3 [sz_df$group == "TD"], 
+                    sz_df$adjPC3 [sz_df$group == "SZ"], 
+                    var.equal=TRUE)
+report.t(res.t, "TD", "SZ")
+```
+
+There are no variance difference between these two groups.
+
+```{r}
+bartlett.test(sz_df$adjPC3, sz_df$group) # Can assume equal variance
+```
+
+
+```{r}
+fit<-lm(PC3 ~ group+sex+age+race2, data=sz_df1)
+Anova(fit, type="III")
+```
+
+##### adjPC4 (residuals(lm(PC4 ~ sex + age)))
+
+PC4 not significant for TD vs SZ.
+
+```{r, results='asis'}
+# sz_df$adjPC3 = residuals(lm(PC3 ~ sex + age, data=sz_df))
+res.t = apa::t_test(sz_df$adjPC4 [sz_df$group == "TD"], 
+                    sz_df$adjPC4 [sz_df$group == "SZ"], 
+                    var.equal=TRUE)
+report.t(res.t, "TD", "SZ")
+```
+
+There are no variance difference between these two groups.
+
+```{r}
+bartlett.test(sz_df$adjPC4, sz_df$group) # Can assume equal variance
+```
+
+
+```{r}
+fit<-lm(PC4 ~ group+sex+age+race2, data=sz_df1)
+Anova(fit, type="III")
+```
+
+
+#### TD vs CR
+
+Comparison of TD with CR shows there are no differences in means.
+
+##### PC1
+
+```{r, results='asis'}
+cr_df = merge(sz_cr, 
+              select(adjPC, !group)) %>%
+  mutate(group = relevel(factor(group), 'TD'))
+# cr_df = merge(cr_df, 
+#               penn_df[, c("bbl_id", "sex", "age")]) %>% 
+#   filter(group != 'SZ') %>% 
+#   drop_na()
+
+cr_df1 <- cr_df[!(cr_df$group =="SZ"),]
+
+res.t = apa::t_test(cr_df[cr_df$group == "TD", "PC1"], cr_df[cr_df$group == "CR", "PC1"], var.equal=TRUE)
+report.t(res.t, "TD", "CR")
+```
+
+But there are variance differences. 
+
+```{r}
+bartlett.test(cr_df$PC1, cr_df$group) # Can assume equal variance
+```
+
+##### adjPC1 (residuals(lm(PC2 ~ sex + age))
+
+```{r, results='asis'}
+# cr_df$adjPC2 = residuals(lm(PC2 ~ sex + age, data=cr_df))
+
+res.t = apa::t_test(cr_df$adjPC1[cr_df$group == "TD"], 
+                    cr_df$adjPC1[cr_df$group == "CR"], 
+                    var.equal=FALSE)
+report.t(res.t, "TD", "CR")
+```
+
+
+```{r}
+fit<-lm(PC1 ~ group+sex+age+race2, data=cr_df1)
+Anova(fit, type="III")
+```
+
+##### PC2
+
+PC2 not significant between TD and CR.
+
+```{r, results='asis'}
+res.t = apa::t_test(cr_df[cr_df$group == "TD", "PC2"], 
+                    cr_df[cr_df$group == "CR", "PC2"], 
+                    var.equal=TRUE)
+report.t(res.t, "TD", "CR")
+```
+
+There are no variance differences. 
+
+```{r}
+bartlett.test(cr_df$PC2, cr_df$group) # Cannot assume equal variance
+```
+
+##### adjPC2 (residuals(lm(PC2 ~ sex + age)))
+
+PC3 of TD and CR after adjusting for age and sex is not significant.
+
+```{r, results='asis'}
+# cr_df$adjPC3 = residuals(lm(PC3 ~ sex + age, data=cr_df))
+
+res.t = apa::t_test(cr_df$adjPC2[cr_df$group == "TD"], 
+                    cr_df$adjPC2[cr_df$group == "CR"], 
+                    var.equal=FALSE)
+report.t(res.t, "TD", "CR")
+```
+
+
+```{r}
+fit<-lm(PC2 ~ group+sex+age+race2, data=cr_df1)
+Anova(fit, type="III", white.adjust = TRUE)
+```
+
+##### PC3
+
+PC3 not significant between TD and CR.
+
+```{r, results='asis'}
+res.t = apa::t_test(cr_df[cr_df$group == "TD", "PC3"], 
+                    cr_df[cr_df$group == "CR", "PC3"], 
+                    var.equal=TRUE)
+report.t(res.t, "TD", "CR")
+```
+
+There are no variance differences. 
+
+```{r}
+bartlett.test(cr_df$PC3, cr_df$group) # Can assume equal variance
+```
+
+##### adjPC3 (residuals(lm(PC3 ~ sex + age)))
+
+PC3 of TD and CR after adjusting for age and sex is not significant.
+
+```{r, results='asis'}
+# cr_df$adjPC3 = residuals(lm(PC3 ~ sex + age, data=cr_df))
+
+res.t = apa::t_test(cr_df$adjPC3[cr_df$group == "TD"], 
+                    cr_df$adjPC3[cr_df$group == "CR"], 
+                    var.equal=FALSE)
+report.t(res.t, "TD", "CR")
+```
+
+
+```{r}
+fit<-lm(PC3 ~ group+sex+age+race2, data=cr_df1)
+Anova(fit, type="III")
+```
+
+##### PC4
+
+PC4 is not significant between TD and CR.
+
+```{r, results='asis'}
+res.t = apa::t_test(cr_df[cr_df$group == "TD", "PC4"], 
+                    cr_df[cr_df$group == "CR", "PC4"], 
+                    var.equal=TRUE)
+report.t(res.t, "TD", "CR")
+```
+
+There are no variance differences. 
+
+```{r}
+bartlett.test(cr_df$PC4, cr_df$group) # Can assume equal variance
+```
+
+##### adjPC4 (residuals(lm(PC4 ~ sex + age)))
+
+PC4 of TD and CR after adjusting for age and sex is  significant.
+
+```{r, results='asis'}
+# cr_df$adjPC3 = residuals(lm(PC3 ~ sex + age, data=cr_df))
+
+res.t = apa::t_test(cr_df$adjPC4[cr_df$group == "TD"], 
+                    cr_df$adjPC4[cr_df$group == "CR"], 
+                    var.equal=FALSE)
+report.t(res.t, "TD", "CR")
+```
+
+
+```{r}
+fit<-lm(PC4 ~ group+sex+age+race2, data=cr_df1)
+Anova(fit, type="III")
+```
+
+#### SZ vs CR
+
+##### PC1
+
+No significant differnce between PC1 of SZ and CR.
+
+```{r}
+sz_cr_df = merge(sz_cr, 
+              select(adjPC_tdps, !group)) %>%
+  mutate(group = relevel(factor(group), 'TD'))
+# sz_cr_df = merge(sz_cr_df, 
+#               penn_df[, c("bbl_id", "sex", "age")]) %>%
+#   filter(group != 'TD') %>%
+#   drop_na()
+
+sz_cr_df1 <- sz_cr_df[!(sz_cr_df$group =="TD"),]
+
+res.t = apa::t_test(sz_cr_df[sz_cr_df$group == "SZ", "PC1"], 
+                    sz_cr_df[sz_cr_df$group == "CR", "PC1"], 
+                    var.equal=TRUE)
+report.t(res.t, "SZ", "CR")
+```
+
+But We see a difference in variances on PC2.
+ 
+```{r}
+bartlett.test(sz_cr_df$PC1, sz_cr_df$group)
+```
+
+ 
+```{r}
+sz_cr_df %>% 
+  filter(group != 'TD') %>%
+  ggplot(aes(x=PC1, y=PC2, color = group)) + 
+  geom_point() + 
+  geom_point(data = sz_cr_df %>% 
+               filter(group != 'TD') %>%
+               group_by(group) %>% 
+               summarize_all(mean), 
+             size = 4, shape = 17) + 
+  scale_color_manual(values = c("orange", "purple"))
+```
+
+##### adjPC1 (residuals(lm(PC1 ~ sex + age)))
+
+Results remain after adjustment. 
+
+```{r, results='asis'}
+# sz_cr_df$adjPC2 = residuals(lm(PC2 ~ sex + age, data=sz_cr_df))
+res.t = apa::t_test(sz_cr_df$adjPC1[sz_cr_df$group == "SZ"], 
+                    sz_cr_df$adjPC1[sz_cr_df$group == "CR"], 
+                    var.equal=TRUE)
+report.t(res.t, "SZ", "CR")
+```
+ 
+```{r}
+bartlett.test(sz_cr_df$adjPC1, sz_cr_df$group)
+```
+
+
+```{r}
+fit<-lm(PC1 ~ group+sex+age+race2, data=sz_cr_df1)
+Anova(fit, type="III")
+```
+
+
+##### PC2
+
+PC3 between SZ and CR is not significantly different.
+
+```{r}
+res.t = apa::t_test(sz_cr_df[sz_cr_df$group == "SZ", "PC2"], 
+                    sz_cr_df[sz_cr_df$group == "CR", "PC2"], 
+                    var.equal=TRUE)
+report.t(res.t, "SZ", "CR")
+```
+
+There is no difference in variances on PC3.
+ 
+```{r}
+bartlett.test(sz_cr_df$PC2, sz_cr_df$group)
+```
+
+##### adjPC2 (residuals(lm(PC2 ~ sex + age)))
+
+Results remain after adjustment. Adjusted PC3 and variance are not significantly different between SZ and CR.
+
+```{r, results='asis'}
+# sz_cr_df$adjPC3 = residuals(lm(PC3 ~ sex + age, data=sz_cr_df))
+res.t = apa::t_test(sz_cr_df$adjPC2[sz_cr_df$group == "SZ"], 
+                    sz_cr_df$adjPC2[sz_cr_df$group == "CR"], 
+                    var.equal=TRUE)
+report.t(res.t, "SZ", "CR")
+```
+ 
+```{r}
+bartlett.test(sz_cr_df$adjPC2, sz_cr_df$group)
+```
+
+
+```{r}
+fit<-lm(PC2 ~ group+sex+age+race2, data=sz_cr_df1)
+Anova(fit, type="III", white.adjust = TRUE)
+```
+
+
+##### PC3
+
+PC3 between SZ and CR is not significantly different.
+
+```{r}
+res.t = apa::t_test(sz_cr_df[sz_cr_df$group == "SZ", "PC3"], 
+                    sz_cr_df[sz_cr_df$group == "CR", "PC3"], 
+                    var.equal=TRUE)
+report.t(res.t, "SZ", "CR")
+```
+
+There is no difference in variances on PC3.
+ 
+```{r}
+bartlett.test(sz_cr_df$PC3, sz_cr_df$group)
+```
+
+##### adjPC3 (residuals(lm(PC3 ~ sex + age)))
+
+Results remain after adjustment. Adjusted PC3 and variance are not significantly different between SZ and CR.
+
+```{r, results='asis'}
+# sz_cr_df$adjPC3 = residuals(lm(PC3 ~ sex + age, data=sz_cr_df))
+res.t = apa::t_test(sz_cr_df$adjPC3[sz_cr_df$group == "SZ"], 
+                    sz_cr_df$adjPC3[sz_cr_df$group == "CR"], 
+                    var.equal=TRUE)
+report.t(res.t, "SZ", "CR")
+```
+ 
+```{r}
+bartlett.test(sz_cr_df$adjPC3, sz_cr_df$group)
+```
+
+
+```{r}
+fit<-lm(PC3 ~ group+sex+age+race2, data=sz_cr_df1)
+Anova(fit, type="III")
+```
+
+##### PC4
+
+PC4 between SZ and CR is significantly different.
+
+```{r}
+res.t = apa::t_test(sz_cr_df[sz_cr_df$group == "SZ", "PC4"], 
+                    sz_cr_df[sz_cr_df$group == "CR", "PC4"], 
+                    var.equal=TRUE)
+report.t(res.t, "SZ", "CR")
+```
+
+There is no difference in variances on PC4.
+ 
+```{r}
+bartlett.test(sz_cr_df$PC4, sz_cr_df$group)
+```
+
+##### adjPC4 (residuals(lm(PC4 ~ sex + age)))
+
+Results remain after adjustment. Adjusted PC4 and variance are not significantly different between SZ and CR.
+
+```{r, results='asis'}
+# sz_cr_df$adjPC3 = residuals(lm(PC3 ~ sex + age, data=sz_cr_df))
+res.t = apa::t_test(sz_cr_df$adjPC4[sz_cr_df$group == "SZ"], 
+                    sz_cr_df$adjPC4[sz_cr_df$group == "CR"], 
+                    var.equal=TRUE)
+report.t(res.t, "SZ", "CR")
+```
+ 
+```{r}
+bartlett.test(sz_cr_df$adjPC4, sz_cr_df$group)
+```
+
+
+```{r}
+fit<-lm(PC4 ~ group+sex+age+race2, data=sz_cr_df1)
+Anova(fit, type="III")
+```
+
+
+
+
+
+
+
+
+
+# Emotrics Summary by Group
+
+## Mean & SD
+
+```{r}
+emotrics = df[1:which(colnames(df) == 'Philtrum')]
+# chop = emotrics[emotrics$group == '22q',]
+# penn = emotrics[emotrics$group != '22q',]
+# get just the emotrics data columns and ensure they're in numeric format
+rois_rl = c('Brow_Height_Right', 'Brow_Height_Left', 
+         'Marginal_Reflex_Distance_1_Right', 'Marginal_Reflex_Distance_1_Left',
+         'Marginal_Reflex_Distance_2_Right', 'Marginal_Reflex_Distance_2_Left',
+         'Philtrum')
+rois = c('Brow_Height', 
+         'Marginal_Reflex_Distance_1',
+         'Marginal_Reflex_Distance_2',
+         'Philtrum')
+
+emotrics[, rois_rl] = apply(emotrics[, rois_rl], MARGIN = 2,
+                           FUN=function(x) {
+                             as.numeric(x)})
+
+# make a dataframe that has the average or left&right measurements
+roi_df = emotrics %>% 
+  rowwise() %>%
+  dplyr::mutate(Brow_Height = mean(c(Brow_Height_Right, Brow_Height_Left)),
+         .keep = 'unused') %>%
+  rowwise() %>%
+  dplyr::mutate(Marginal_Reflex_Distance_1 = mean(c(Marginal_Reflex_Distance_1_Right,
+                                             Marginal_Reflex_Distance_1_Left)),
+         .keep = 'unused') %>%
+  rowwise() %>%
+  dplyr::mutate(Marginal_Reflex_Distance_2 = mean(c(Marginal_Reflex_Distance_2_Right,
+                                             Marginal_Reflex_Distance_2_Left)),
+         .keep = 'unused')
+
+
+get_emotrics_average_table <- function(roi_df) {
+  # get mean and SD of features by group
+  mean_sd <- apply(roi_df[, rois], MARGIN = 2,
+                   FUN=function(x) {
+                     tibble("Group" = roi_df$group,
+                            "Measurement" = x) %>%
+                       group_by(Group) %>%
+                       dplyr::summarise(Mean = mean(Measurement),
+                                        SD = sd(Measurement))
+                   })
+  
+  
+  mean_sd_df <- tibble('group' = c('TD', '22q', 'PS'))
+  for (r in 1:length(mean_sd)) {
+    roi = names(mean_sd)[r]
+    roi_mean_sd <- tibble(group = mean_sd[[roi]]$Group,
+                          mean_sd = sprintf("%.3f \U00B1 %.3f", 
+                                            mean_sd[[roi]]$Mean, 
+                                            mean_sd[[roi]]$SD))
+    
+    colnames(roi_mean_sd) = c('group', roi)
+    
+    mean_sd_df = merge(mean_sd_df, roi_mean_sd, by = 'group')
+  }
+  
+  # get group N
+  group_n = roi_df[, c('bbl_id', 'group')]
+  group_n %<>% 
+    group_by(group) %>%
+    dplyr::count()
+  
+  # merge group N with mean&SD of each feature by group
+  mean_sd_df = merge(group_n, mean_sd_df, by = 'group')
+  
+  # re-style the column names to display as a table
+  print_rois = sapply(seq(3,length(mean_sd_df)), 
+                      FUN=function(x) {
+                        roi = colnames(mean_sd_df)[x]
+                        str_replace_all(roi, '_', ' ')})
+  
+  # display the summarized emotrics data as a table
+  emotrics_average = kable(mean_sd_df, 
+                           col.names = c('Group', 'N', print_rois),
+                           booktabs = T,
+                           align = c(rep('c', 6))) %>%
+    column_spec(1,width = "0.3in") %>%
+    column_spec(2,width = "0.3in") %>%
+    column_spec(3,width = "1in") %>%
+    column_spec(4,width = "1in") %>%
+    column_spec(5,width = "1.7in") %>%
+    column_spec(6,width = "1.7in") %>%
+    kable_classic(full_width = F, 
+                  html_font = "Cambria", 
+                  font_size =10) %>%
+    kable_styling(latex_options = "HOLD_position")
+  
+  return(emotrics_average)
+}
+
+```
+
+
+```{r}
+emotrics_average = get_emotrics_average_table(roi_df)
+save_kable(emotrics_average, 
+           file = file.path(manuscript_out, 'emotrics_average.html'))
+webshot::webshot(file.path(manuscript_out, 'emotrics_average.html'), 
+                 file.path(manuscript_out, 'emotrics_average.pdf'))
+ 
+emotrics_average
+```
+<br />
+<br />
+
+# Average Emotrics in Black
+
+```{r}
+emotrics_average_black = get_emotrics_average_table(roi_df %>% 
+                                                filter(race == "Black/African American"))
+save_kable(emotrics_average_black, 
+           file = file.path(manuscript_out, 'emotrics_average_black.html'))
+webshot::webshot(file.path(manuscript_out, 'emotrics_average_black.html'), 
+                 file.path(manuscript_out, 'emotrics_average_black.pdf'))
+ 
+emotrics_average_black
+```
+
+
+## Emotrics Average in White
+
+```{r}
+emotrics_average_white = get_emotrics_average_table(roi_df %>% 
+                                                filter(race == "White"))
+save_kable(emotrics_average_white, 
+           file = file.path(manuscript_out, 'emotrics_average_white.html'))
+webshot::webshot(file.path(manuscript_out, 'emotrics_average_white.html'), 
+                 file.path(manuscript_out, 'emotrics_average_white.pdf'))
+ 
+emotrics_average_white
+```
+
+
+```{r, boxplot, fig.height=8, fig.width=10}
+
+# display average by group
+plt_list <- list()
+
+# iterate average dataframe by feature and display as boxplot
+pdf(file=file.path(manuscript_out, 'Figure3.pdf'))
+for (r in 1:length(rois)){
+  roi = rois[r]
+  roi_data <- roi_df[, c('group', 'bbl_id', roi)] 
+  
+  roi_plot <- ggplot(roi_data, aes_string(x = "group", 
+                                          y = roi,
+                                          fill = "group")) +
+    geom_boxplot() +
+    ggtitle(str_replace_all(roi, '_', ' ')) +
+    theme_light() +
+    theme(plot.title = element_text(hjust = 0.5, size = 15),
+          axis.title.x = element_blank(),
+          axis.title.y = element_blank(),
+          axis.text.x = element_text(size = 11)) +
+    geom_boxplot(outlier.shape = NA) +
+    theme(legend.position = "none") +
+    scale_fill_manual(values = c("orange", "pink", "sky blue"))
+
+  # store each (feature) plot into a list
+  plt_list[[r]] = roi_plot
+
+}
+
+# store list as a grid plot
+plots <- cowplot::plot_grid(plotlist = plt_list, ncol = 2, label_y = 'Label')
+
+# set grid x and y labels
+y.grob <- textGrob("Measurement (mm)", 
+                   gp=gpar(fontsize=14), rot=90)
+
+x.grob <- textGrob("Group", 
+                   gp=gpar(fontsize=14))
+
+# display grid plot
+grid.arrange(arrangeGrob(plots, left = y.grob, bottom = x.grob))
+
+dev.off()
+
+```
+
+## Barplot including all subjects
+
+```{r}
+# display average by group
+plt_list <- list()
+
+# iterate average dataframe by feature and display as boxplot
+pdf(file=file.path(manuscript_out, 'emotrics_barplot.pdf'))
+for (r in 1:length(rois)){
+  roi = rois[r]
+  roi_data <- roi_df[, c('group', 'bbl_id', roi)] %>%
+    group_by(group) %>%
+    dplyr::summarise(mean = mean(get(roi)), sd = sd(get(roi)))
+  
+  max_value = max(roi_data %>% summarise(height = mean + sd))
+  
+  roi_plot <- ggplot(roi_data, aes(group, mean)) +
+    geom_bar(aes(fill=group),stat='identity') +
+    geom_errorbar(aes(ymin = mean - sd, ymax = mean + sd), 
+                  width = 0.2, position = position_dodge(0.9)) +
+    ggtitle(str_replace_all(roi, '_', ' ')) +
+    theme_light() +
+    theme(plot.title = element_text(hjust = 0.5, size = 15),
+          axis.title.x = element_blank(),
+          axis.title.y = element_blank(),
+          axis.text.x = element_text(size = 11),
+          legend.position = "none") +
+    scale_x_discrete(labels=c('22q11DS', 'PS', 'TD')) +
+    scale_fill_manual(values = c("orange", "pink", "sky blue")) +
+    scale_y_continuous(limits = c(0, max_value + (max_value / 8)), 
+                       breaks = seq(0, max_value + (max_value / 8), 
+                                    by = ceiling(max_value / 5)))
+
+  # store each (feature) plot into a list
+  plt_list[[r]] = roi_plot
+
+}
+
+# store list as a grid plot
+plots <- cowplot::plot_grid(plotlist = plt_list, ncol = 2, label_y = 'Label')
+
+# set grid x and y labels
+y.grob <- textGrob("Measurement (mm)", 
+                   gp=gpar(fontsize=14), rot=90)
+
+x.grob <- textGrob("Group", 
+                   gp=gpar(fontsize=14))
+
+# display grid plot
+grid.arrange(arrangeGrob(plots, left = y.grob, bottom = x.grob))
+
+dev.off()
+
+```
+
+## Barpolot with just Caucasians
+
+```{r}
+library(cowplot)
+# display average by group
+plt_list <- list()
+
+# iterate average dataframe by feature and display as boxplot
+pdf(file=file.path(manuscript_out, 'emotrics_barplot_white.pdf'))
+for (r in 1:length(rois)){
+  roi = rois[r]
+  roi_data <- roi_df[, c('group', 'race', 'bbl_id', roi)] %>%
+    filter(race == 'White') %>%
+    group_by(group) %>%
+    dplyr::summarise(mean = mean(get(roi)), sd = sd(get(roi)))
+  
+  max_value = max(roi_data %>% summarise(height = mean + sd))
+  
+  roi_plot <- ggplot(roi_data, aes(x=group, y=mean)) +
+    geom_col_pattern(aes(x=group, y=mean, pattern_fill=group),
+                     pattern_color = c("orange", "pink", "sky blue"), 
+                     pattern_fill = "white", 
+                     pattern_size = 0.5,
+                     pattern_density = 0.5,
+                     pattern = "stripe",
+                     fill = c("orange", "pink", "sky blue"),
+                     color = c("orange", "pink", "sky blue")) +
+    geom_errorbar(aes(ymin = mean - sd, ymax = mean + sd), 
+                  width = 0.2, position = position_dodge(0.9)) +
+    ggtitle(str_replace_all(roi, '_', ' ')) +
+    theme_light() +
+    theme(plot.title = element_text(hjust = 0.5, size = 15),
+          axis.title.x = element_blank(),
+          axis.title.y = element_blank(),
+          axis.text.x = element_text(size = 11),
+          legend.position = "none") +
+    scale_x_discrete(labels=c('22q11DS', 'PS', 'TD')) +
+    scale_y_continuous(limits = c(0, max_value + (max_value / 8)), 
+                       breaks = seq(0, max_value + (max_value / 8), 
+                                    by = ceiling(max_value / 5)))
+
+  # store each (feature) plot into a list
+  plt_list[[r]] = roi_plot
+
+}
+
+# store list as a grid plot
+plots <- cowplot::plot_grid(plotlist = plt_list, ncol = 2, label_y = 'Label')
+
+# set grid x and y labels
+y.grob <- textGrob("Measurement (mm)", 
+                   gp=gpar(fontsize=14), rot=90)
+
+x.grob <- textGrob("group", 
+                   gp=gpar(fontsize=14))
+
+# display grid plot
+grid.arrange(arrangeGrob(plots, left = y.grob, bottom = x.grob))
+
+dev.off()
+
+```
+
+## Barplot with just Black/African American
+
+```{r}
+
+# display average by group
+plt_list <- list()
+
+# iterate average dataframe by feature and display as boxplot
+pdf(file=file.path(manuscript_out, 'emotrics_barplot_black.pdf'))
+for (r in 1:length(rois)){
+  roi = rois[r]
+  roi_data <- roi_df[, c('group', 'race', 'bbl_id', roi)] %>%
+    filter(race == 'Black/African American') %>%
+    group_by(group) %>%
+    dplyr::summarise(mean = mean(get(roi)), sd = sd(get(roi)))
+  
+  max_value = max(roi_data %>% summarise(height = mean + sd))
+  
+  roi_plot <- ggplot(roi_data, aes(x=group, y=mean)) +
+    geom_col_pattern(aes(x=group, y=mean, pattern_fill=group),
+                     pattern_color = c("orange", "pink", "sky blue"), 
+                     pattern_fill = "black", 
+                     pattern_size = 0.5,
+                     pattern_density = 0.5,
+                     pattern = "stripe",
+                     fill = c("orange", "pink", "sky blue"),
+                     color = c("orange", "pink", "sky blue")) +
+    geom_errorbar(aes(ymin = mean - sd, ymax = mean + sd, color = 'white'), size = 1.2, 
+                  width = 0.25, position = position_dodge(0.9)) +
+    scale_color_manual(values = rep("white", 9)) +
+    geom_errorbar(aes(ymin = mean - sd, ymax = mean + sd), size = 0.7, 
+                  width = 0.2, position = position_dodge(0.9))  +
+    ggtitle(str_replace_all(roi, '_', ' ')) +
+    theme_light() +
+    theme(plot.title = element_text(hjust = 0.5, size = 15),
+          axis.title.x = element_blank(),
+          axis.title.y = element_blank(),
+          axis.text.x = element_text(size = 11),
+          legend.position = "none") +
+    scale_x_discrete(labels=c('22q11DS', 'PS', 'TD')) +
+    scale_y_continuous(limits = c(0, max_value + (max_value / 8)), 
+                       breaks = seq(0, max_value + (max_value / 8), 
+                                    by = ceiling(max_value / 5)))
+
+  # store each (feature) plot into a list
+  plt_list[[r]] = roi_plot
+
+}
+
+# store list as a grid plot
+plots <- cowplot::plot_grid(plotlist = plt_list, ncol = 2, label_y = 'Label')
+
+# set grid x and y labels
+y.grob <- textGrob("Measurement (mm)", 
+                   gp=gpar(fontsize=14), rot=90)
+
+x.grob <- textGrob("Group", 
+                   gp=gpar(fontsize=14))
+
+# display grid plot
+grid.arrange(arrangeGrob(plots, left = y.grob, bottom = x.grob))
+
+dev.off()
+
+```
+
+## Barplot All, White, Black/African American combined
+
+```{r}
+
+# display average by group
+plt_list <- list()
+
+# iterate average dataframe by feature and display as boxplot
+pdf(file=file.path(manuscript_out, 'emotrics_barplot_combined.pdf'), 10, 5)
+for (r in 1:length(rois)){
+  roi = rois[r]
+  combined_df = rbind(roi_df[, c('group', 'race', 'bbl_id', roi)] %>%
+                        mutate(race = 'All'),
+                      roi_df[, c('group', 'race', 'bbl_id', roi)] %>%
+                        filter(race %in% c("Black/African American", "White")))
+  roi_data <- combined_df[, c('group', 'bbl_id', roi, 'race')] %>%
+    group_by(race, group) %>%
+    dplyr::summarise(mean = mean(get(roi)), sd = sd(get(roi)))
+  
+  max_value = max(roi_data %>% 
+                    summarise(height = mean + sd) %>% 
+                    ungroup() %>%
+                    select(height))
+  
+  roi_plot <- ggplot(roi_data %>% ungroup(), aes(x=race, y=mean, fill=group, pattern=group)) +
+    geom_col_pattern(position = position_dodge(preserve = "single"),
+                     color = rep(c("orange", "pink", "sky blue"), 3), 
+                     pattern_fill = c(rep("white", 3), rep("black",3), rep("white", 3)),
+                     pattern_size = 0.5,
+                     pattern_density = 0.5,
+                     pattern = c(rep("none", 3), rep("stripe", 6)),
+                     pattern_color = c(rep("white", 3), 
+                                       rep(c("orange", "pink", "sky blue"), 2))) +
+    scale_fill_manual(values = c("orange", "pink", "sky blue")) +
+    geom_errorbar(aes(ymin = mean - sd, ymax = mean + sd, color = 'white'), size = 1.2, 
+                  width = 0.25, position = position_dodge(0.9)) +
+    scale_color_manual(values = rep("white", 9)) +
+    geom_errorbar(aes(ymin = mean - sd, ymax = mean + sd), size = 0.7, 
+                  width = 0.2, position = position_dodge(0.9)) +
+    ggtitle(str_replace_all(roi, '_', ' ')) +
+    theme_light() +
+    theme(plot.title = element_text(hjust = 0.5, size = 15),
+          axis.title.x = element_blank(),
+          axis.title.y = element_blank(),
+          axis.text.x = element_text(size = 11),
+          legend.position = "none") +
+    scale_y_continuous(limits = c(0, max_value + (max_value / 8)), 
+                       breaks = seq(0, max_value + (max_value / 8), 
+                                    by = ceiling(max_value / 5)))
+
+  # store each (feature) plot into a list
+  plt_list[[r]] = roi_plot
+
+}
+
+# plt_list[[r - 1]] = plt_list[[r - 1]] + theme(legend.position = "right")
+# store list as a grid plot
+plots <- cowplot::plot_grid(plotlist = plt_list, ncol = 2, label_y = 'Label')
+
+# set grid x and y labels
+y.grob <- textGrob("Measurement (mm)", 
+                   gp=gpar(fontsize=14), rot=90)
+
+x.grob <- textGrob("Race", 
+                   gp=gpar(fontsize=14))
+
+# display grid plot
+grid.arrange(arrangeGrob(plots, left = y.grob, bottom = x.grob))
+
+dev.off()
+
+```
+
+
+```{r, boxplot_outliers, fig.height=8, fig.width=10}
+
+# display outliers on the boxplot; not used
+is_outlier <- function(x) {
+  return(x < quantile(x, 0.25) - 1.5 * IQR(x) | x > quantile(x, 0.75) + 1.5 * IQR(x))
+}
+
+
+plt_list <- list()
+
+for (r in 1:length(rois)){
+  roi = rois[r]
+  roi_data <- roi_df[, c('group', 'bbl_id', roi)] %>%
+    group_by(group) %>%
+    dplyr::mutate(outlier = ifelse(is_outlier(get(roi)), bbl_id, as.numeric(NA)))
+  
+  roi_plot <- ggplot(roi_data, aes_string(x = "group", 
+                                          y = roi,
+                                          fill = "group")) +
+    geom_boxplot() +
+    geom_text(aes(label = outlier), na.rm = TRUE, hjust = -0.3) +
+    ggtitle(str_replace_all(roi, '_', ' ')) +
+    theme_light() +
+    theme(plot.title = element_text(hjust = 0.5, size = 20),
+          axis.title.x = element_blank(),
+          axis.title.y = element_blank(),
+          axis.text.x = element_text(size = 13)) +
+    theme(legend.position = "none") +
+    scale_fill_manual(values = c("orange", "pink", "sky blue"))
+
+  plt_list[[r]] = roi_plot
+
+}
+
+
+plots <- cowplot::plot_grid(plotlist = plt_list, ncol = 2, label_y = 'Label')
+
+y.grob <- textGrob("Measurement (mm)", 
+                   gp=gpar(fontsize=17), rot=90)
+
+x.grob <- textGrob("Group", 
+                   gp=gpar(fontsize=17))
+
+#add to plot
+
+grid.arrange(arrangeGrob(plots, left = y.grob, bottom = x.grob))
+```
+# Comparing 22q Emotrics values for in-lab vs self pictures
+
+## Brow Height--difference b/w in and out lab...but no difference in BH b/w any groups. 
+
+```{r}
+roi_df_chop = roi_df[roi_df$group == '22q', ]
+inlab = roi_df_chop[roi_df_chop$`In-lab Picture` == 1, ]
+outlab = roi_df_chop[roi_df_chop$`In-lab Picture` == 0, ]
+report.t(apa::t_test(inlab$Brow_Height, outlab$Brow_Height),
+         'In-lab', 'Out-lab')
+```
+
+## Marginal Reflex Distance 1
+
+```{r}
+report.t(apa::t_test(inlab$Marginal_Reflex_Distance_1,
+                     outlab$Marginal_Reflex_Distance_1),
+         'In-lab', 'Out-lab')
+```
+
+## Marginal Reflex Distance 2
+
+```{r}
+report.t(apa::t_test(inlab$Marginal_Reflex_Distance_2,
+                     outlab$Marginal_Reflex_Distance_2),
+         'In-lab', 'Out-lab')
+```
+
+
+## Philtrum
+
+```{r}
+report.t(apa::t_test(inlab$Philtrum, outlab$Philtrum),
+         'In-lab', 'Out-lab')
+```
+
+# Emotrics 22q Adult vs Kids---Marginal effects b/w groups. Age is included in all models. 
+
+## Brow Height
+
+```{r}
+adult = roi_df_chop[roi_df_chop$age >= 18, ]
+kids = roi_df_chop[roi_df_chop$age < 18, ]
+
+report.t(apa::t_test(adult$Brow_Height, kids$Brow_Height),
+         'Adult', 'Kid')
+```
+
+
+## Marginal Reflex Distance 1
+
+```{r}
+report.t(apa::t_test(adult$Marginal_Reflex_Distance_1,
+                     kids$Marginal_Reflex_Distance_1),
+         'Adult', 'Kid')
+```
+
+## Marginal Reflex Distance 2
+
+```{r}
+report.t(apa::t_test(adult$Marginal_Reflex_Distance_2,
+                     kids$Marginal_Reflex_Distance_2),
+         'Adult', 'Kid')
+```
+
+
+## Philtrum
+
+```{r}
+report.t(apa::t_test(adult$Philtrum, kids$Philtrum),
+         'Adult', 'Kid')
+```
+
+# Emotrics ANOVA & t-tests
+
+## ANOVA (22q, PS, & TD)
+
+#fix race2 variable name
+```{r}
+roi_race2<-roi_df$race2
+```
+
+MRD1,MRD2 and PHL significantly different across groups.BH not 
+
+### Brow Height
+
+#emotrics df for only black and white
+```{r}
+roi_df_bw<-roi_df[roi_df$race2 !="Other", ]
+```
+
+```{r}
+fit<-lm(Brow_Height ~ group+sex+age+race2, data=roi_df)
+Anova(fit, type="III")
+
+fit2<-lm(Brow_Height ~ group*race2+sex+age, data=roi_df_bw)
+Anova(fit2, type="III")
+
+```
+
+```{r}
+library(emmeans)
+em_out_brow <- emmeans(fit, pairwise ~ group, adjust="fdr")[[2]]
+em_out_brow
+```
+### Marginal Reflex Distance 1
+
+```{r}
+anova(lm(Marginal_Reflex_Distance_1 ~ group, roi_df))
+
+```
+
+```{r}
+fit<-lm(Marginal_Reflex_Distance_1 ~ group+sex+age+race2, data=roi_df)
+Anova(fit, type="III")
+
+fit2<-lm(Marginal_Reflex_Distance_1 ~ group*race2+sex+age, data=roi_df_bw)
+Anova(fit2, type="III")
+```
+
+```{r}
+library(emmeans)
+em_out_mrd1 <- emmeans(fit, pairwise ~ group, adjust="fdr")[[2]]
+em_out_mrd1
+```
+
+
+
+### Marginal Reflex Distance 2
+
+```{r}
+anova(lm(Marginal_Reflex_Distance_2 ~ group, roi_df))
+```
+
+```{r}
+fit<-lm(Marginal_Reflex_Distance_2 ~ group+sex+age+race2, data=roi_df)
+Anova(fit, type="III")
+
+fit2<-lm(Marginal_Reflex_Distance_2 ~ group*race2+sex+age, data=roi_df_bw)
+Anova(fit2, type="III")
+```
+
+```{r}
+library(emmeans)
+em_out_mrd2 <- emmeans(fit, pairwise ~ group,adjust="fdr")[[2]]
+em_out_mrd2
+```
+
+### Philtrum
+```{r}
+anova(lm(Philtrum ~ group, roi_df))
+
+```
+
+```{r}
+fit<-lm(Philtrum ~ group+sex+age+race2, data=roi_df)
+Anova(fit, type="III")
+
+fit2<-lm(Philtrum ~ group*race2+sex+age, data=roi_df)
+Anova(fit2, type="III")
+```
+
+
+```{r}
+library(emmeans)
+em_out_phil <- emmeans(fit, pairwise ~ group, adjust="fdr")[[2]]
+em_out_phil
+```
+
+
+#TD vs SZ (make df for emotrics comparison)
+```{r}
+sz_cr$dsm_group<-sz_cr$group
+sz_cr_df_emo<-merge(sz_cr,roi_df, by="bbl_id")
+sz_td_df_emo <- sz_cr_df_emo[!(sz_cr_df_emo$dsm_group =="CR"),]
+```
+#BH
+```{r}
+fit<-lm(Brow_Height ~ dsm_group+sex+age+race2, data=sz_td_df_emo)
+Anova(fit, type="III")
+```
+#MRD1
+```{r}
+fit<-lm(Marginal_Reflex_Distance_1 ~ dsm_group+sex+age+race2, data=sz_td_df_emo)
+Anova(fit, type="III")
+```
+#MRD2
+```{r}
+fit<-lm(Marginal_Reflex_Distance_2 ~ dsm_group+sex+age+race2, data=sz_td_df_emo)
+Anova(fit, type="III")
+```
+#Philtrum
+```{r}
+fit<-lm(Philtrum ~ dsm_group+sex+age+race2, data=sz_td_df_emo)
+Anova(fit, type="III")
+```
+
+
+
+#TD vs CR (make df for emotrics comparison)
+```{r}
+#TD vs CR (make df for emotrics comparison)
+cr_td_df_emo <- sz_cr_df_emo[!(sz_cr_df_emo$dsm_group =="SZ"),]
+```
+
+```{r}
+fit<-lm(Brow_Height ~ dsm_group+sex+age+race2, data=cr_td_df_emo)
+Anova(fit, type="III")
+```
+#MRD1
+```{r}
+fit<-lm(Marginal_Reflex_Distance_1 ~ dsm_group+sex+age+race2, data=cr_td_df_emo)
+Anova(fit, type="III")
+```
+#MRD2
+```{r}
+fit<-lm(Marginal_Reflex_Distance_2 ~ dsm_group+sex+age+race2, data=cr_td_df_emo)
+Anova(fit, type="III")
+```
+#Philtrum
+```{r}
+fit<-lm(Philtrum ~ dsm_group+sex+age+race2, data=cr_td_df_emo)
+Anova(fit, type="III")
+```
+
+```{r}
+sz_cr_only_df_emo <- sz_cr_df_emo[!(sz_cr_df_emo$dsm_group =="TD"),]
+```
+#Brow Height
+```{r}
+fit<-lm(Brow_Height ~ dsm_group+sex+age+race2, data=sz_cr_only_df_emo)
+Anova(fit, type="III")
+```
+#MRD1
+```{r}
+fit<-lm(Marginal_Reflex_Distance_1 ~ dsm_group+sex+age+race2, data=sz_cr_only_df_emo)
+Anova(fit, type="III")
+```
+#MRD2
+```{r}
+fit<-lm(Marginal_Reflex_Distance_2 ~ dsm_group+sex+age+race2, data=sz_cr_only_df_emo)
+Anova(fit, type="III")
+```
+#Philtrum
+```{r}
+fit<-lm(Philtrum ~ dsm_group+sex+age+race2, data=sz_cr_only_df_emo)
+Anova(fit, type="III")
+```
+
+
+## 22q+PS & 22q-PS
+
+
+
+```{r, ps_non_ps_boxplot, fig.height=8, fig.width=10}
+# plot left right average by PS status
+chop_roi_df = roi_df[roi_df$group == '22q', ]
+chop_roi_df$PS = sapply(chop_roi_df$PS, 
+                        FUN = function(x) {
+                          ifelse(x == 1, 'Psychosis', 'Non-Psychosis')
+                        })
+
+plt_list <- list()
+pdf(file=file.path(manuscript_out, '22qPS_barplot.pdf'))
+for (r in 1:length(rois)){
+  
+  roi = rois[r]
+  roi_data <- chop_roi_df[, c('PS', roi)]
+  roi_data = drop_na(roi_data)
+  roi_data <- roi_data %>%
+    group_by(PS) %>%
+    dplyr::summarise(mean = mean(get(roi)), sd = sd(get(roi)))
+  
+  max_value = max(roi_data %>% summarise(height = mean + sd))
+ 
+  roi_plot <- ggplot(roi_data, aes(PS, mean)) +
+    geom_col_pattern(
+      aes(PS, mean, pattern_fill = PS),
+      pattern_color =  c("white", "pink"),
+      pattern_fill = c("white", "pink"),
+      pattern_size = 1,
+      fill = 'orange',
+      color = 'orange') +
+    geom_errorbar(aes(ymin = mean - sd, ymax = mean + sd), 
+                  width = 0.2, position = position_dodge(0.9)) +
+    ggtitle(str_replace_all(roi, '_', ' ')) +
+    theme_light() +
+    theme(plot.title = element_text(hjust = 0.5, size = 15),
+          axis.title.x = element_blank(),
+          axis.title.y = element_blank(),
+          axis.text.x = element_text(size = 11),
+          legend.position = "none") +
+    scale_x_discrete(labels=c('22q11DS-', '22q11DS+')) +
+    scale_y_continuous(limits = c(0, max_value + (max_value / 8)), 
+                       breaks = seq(0, max_value + (max_value / 8), 
+                                    by = ceiling(max_value / 5)))
+
+  # store each (feature) plot into a list
+  plt_list[[r]] = roi_plot
+  
+
+}
+
+
+plots <- cowplot::plot_grid(plotlist = plt_list, ncol = 2, label_y = 'Label')
+
+y.grob <- textGrob("Measurement (mm)", 
+                   gp=gpar(fontsize=17), rot=90)
+
+x.grob <- textGrob("Group", 
+                   gp=gpar(fontsize=17))
+
+#add to plot
+
+grid.arrange(arrangeGrob(plots, left = y.grob, bottom = x.grob))
+dev.off()
+```
+
+
+### Brow Height
+
+<br />
+
+```{r}
+wwo_ps_22q_data = roi_df[roi_df$group == '22q', ]
+```
+
+
+```{r}
+bh = wwo_ps_22q_data[, c('group', 'age', 'sex', 'race2', 'PS', 'Brow_Height')]
+w_ps_data = bh$Brow_Height[bh$PS == 1]
+wo_ps_data = bh$Brow_Height[bh$PS == 0]
+
+report.t(apa::t_test(w_ps_data, wo_ps_data), '22+PS', '22q-PS')
+effectsize::cohens_d(w_ps_data, wo_ps_data)
+```
+```{r}
+fit<-lm(Brow_Height ~ PS+sex+age+race2, data=bh)
+Anova(fit, type="III")
+```
+
+### Marginal Reflex Distance 1
+
+<br />
+
+Marginal Reflex Distance 1 was not significantly different between 22q and PS.
+
+```{r}
+mrd1 = wwo_ps_22q_data[, c('group', 'age', 'sex', 'race2', 'PS', 'Marginal_Reflex_Distance_1')]
+w_ps_data = mrd1$Marginal_Reflex_Distance_1[mrd1$PS == 1]
+wo_ps_data = mrd1$Marginal_Reflex_Distance_1[mrd1$PS == 0]
+
+report.t(apa::t_test(w_ps_data, wo_ps_data), '22q+PS', '22q-PS')
+effectsize::cohens_d(w_ps_data, wo_ps_data)
+```
+
+```{r}
+fit<-lm(Marginal_Reflex_Distance_1 ~ PS+sex+age+race2, data=mrd1)
+Anova(fit, type="III")
+```
+
+```{r}
+em_out_22q_mrd1 <- emmeans(fit, pairwise ~ PS, adjust="fdr")[[2]]
+em_out_22q_mrd1
+```
+
+### Marginal Reflex Distance 2
+
+<br />
+
+PS subjects had significantly longer marginal reflex distance 2 than 22q subjects.
+
+```{r}
+mrd2 = wwo_ps_22q_data[, c('group', 'age', 'sex', 'race2', 'PS', 'Marginal_Reflex_Distance_2')]
+w_ps_data = mrd2$Marginal_Reflex_Distance_2[mrd2$PS == 1]
+wo_ps_data = mrd2$Marginal_Reflex_Distance_2[mrd2$PS == 0]
+
+report.t(apa::t_test(w_ps_data, wo_ps_data), '22q+PS', '22q-PS')
+effectsize::cohens_d(w_ps_data, wo_ps_data)
+```
+
+
+```{r}
+fit<-lm(Marginal_Reflex_Distance_2 ~ PS+sex+age+race2, data=mrd2)
+Anova(fit, type="III")
+```
+
+```{r}
+em_out_22q_mrd2 <- emmeans(fit, pairwise ~ PS, adjust="fdr")[[2]]
+em_out_22q_mrd2
+```
+### Philtrum
+
+<br />
+
+
+
+```{r}
+philtrum = wwo_ps_22q_data[, c('group', 'age', 'sex', 'race2', 'PS',  'Philtrum')]
+w_ps_data = philtrum$Philtrum[philtrum$PS == 1]
+wo_ps_data = philtrum$Philtrum[philtrum$PS == 0]
+
+report.t(apa::t_test(w_ps_data, wo_ps_data), '22q+PS', '22q-PS')
+effectsize::cohens_d(w_ps_data, wo_ps_data)
+```
+
+
+```{r}
+fit<-lm(Philtrum ~ PS+sex+age+race2, data=philtrum)
+Anova(fit, type="III")
+```
+
+```{r}
+em_out_22q_phil <- emmeans(fit, pairwise ~ PS, adjust="fdr")[[2]]
+em_out_22q_phil
+```
+
+
+
+
+## AD vs non-AD 22q11.DS Subjects
+There is no difference between 22q with and without A-D deletion.
+<br />
+<br />
+
+```{r, fig.height=8, fig.width=10}
+# plot left right average values by A-D Present
+
+# get just the chop data from roi_df 
+chop_roi_df = roi_df[roi_df$group == '22q', ]
+chop_roi_df$AD_Present = sapply(chop_roi_df$`A-D Present`, 
+                                   FUN = function(x) {
+                                     ifelse(x == 1, 
+                                            'A-D Deletion', 
+                                            'Not A-D Deletion')})
+
+plt_list <- list()
+
+for (r in 1:length(rois)){
+  roi = rois[r]
+  roi_data <- chop_roi_df[, c('AD_Present', roi)]
+  roi_data = drop_na(roi_data)
+  roi_plot <- ggplot(roi_data, aes_string(x = 'AD_Present',
+                                          y = roi,
+                                          fill = 'AD_Present')) +
+    geom_boxplot_pattern(pattern_color = "white", 
+                       pattern_fill = "white", 
+                       aes_string(pattern = 'AD_Present')) +
+    scale_fill_manual(values = c("orange", "orange", "black", "black"), guide = 'none') +
+    ggtitle(str_replace_all(roi, '_', ' ')) +
+    theme_light() +
+    theme(plot.title = element_text(hjust = 0.5, size=20),
+          axis.title.x = element_blank(),
+          axis.title.y = element_blank(),
+          axis.text.x = element_text(size = 13)) +
+    theme(legend.position = "none")
+  
+  plt_list[[r]] = roi_plot
+
+}
+
+
+plots <- cowplot::plot_grid(plotlist = plt_list, ncol = 2, label_y = 'Label')
+
+y.grob <- textGrob("Measurement (mm)", 
+                   gp=gpar(fontsize=17), rot=90)
+
+x.grob <- textGrob("Group", 
+                   gp=gpar(fontsize=17))
+
+#add to plot
+
+grid.arrange(arrangeGrob(plots, left = y.grob, bottom = x.grob))
+```
+
+
+
+# Correlate the 22q PCs and projected PCs with facial measurements
+
+## TD, 22q, & PS
+
+Brow height, philtrum, marginal reflex distance 1&2 are all correlated with PC2. \
+Brow height and philtrum are correlated with PC3.
+
+
+```{r}
+# Add emotrics to scores data.frame
+emo_df<-merge(roi_df %>% select(!race),
+              adjPC)
+
+cor_adjpc <- function(emo_df, rois) {
+  
+  res.cor = psych::corr.test(emo_df[, "adjPC1"],
+                             emo_df[, rois], 
+                             adjust='fdr')
+  
+  cor.mat = rbind(res.cor$r[1,], 
+                  res.cor$p.adj[1,])
+  
+  rownames(cor.mat) = c('PC1', 'p')
+  
+  res.cor = psych::corr.test(emo_df[, "adjPC2"],
+                             emo_df[, rois], 
+                             adjust='fdr')
+  cor.mat = rbind(cor.mat,
+                  res.cor$r[1,], 
+                  res.cor$p.adj[1,])
+  
+  rownames(cor.mat)[3:4] = c('PC2', 'p')
+  
+  res.cor = psych::corr.test(emo_df[, "adjPC3"],
+                             emo_df[, rois], 
+                             adjust='fdr')
+  cor.mat = rbind(cor.mat,
+                  res.cor$r[1,], 
+                  res.cor$p.adj[1,])
+  
+  rownames(cor.mat)[5:6] = c('PC3', 'p')
+  
+  res.cor = psych::corr.test(emo_df[, "adjPC4"],
+                             emo_df[, rois], 
+                             adjust='fdr')
+  cor.mat = rbind(cor.mat,
+                  res.cor$r[1,], 
+                  res.cor$p.adj[1,])
+  
+  rownames(cor.mat)[7:8] = c('PC4', 'p')
+  
+  return(cor.mat)
+}
+
+cor_pc2 <- function(emo_df, rois) {
+  
+  res.cor = psych::corr.test(emo_df[, "PC1"],
+                             emo_df[, rois], 
+                             adjust='fdr')
+  
+  cor.mat = rbind(res.cor$r[1,], 
+                  res.cor$p.adj[1,])
+  
+  rownames(cor.mat) = c('PC1', 'p')
+  
+  res.cor = psych::corr.test(emo_df[, "adjPC1"],
+                             emo_df[, rois], 
+                             adjust='fdr')
+  cor.mat = rbind(cor.mat,
+                  res.cor$r[1,], 
+                  res.cor$p.adj[1,])
+  
+  rownames(cor.mat)[3:4] = c('adj PC1', 'p')
+  
+  
+  res.cor = psych::corr.test(emo_df[, "PC2"],
+                             emo_df[, rois], 
+                             adjust='fdr')
+  
+  cor.mat = rbind(cor.mat,
+                  res.cor$r[1,], 
+                  res.cor$p.adj[1,])
+  
+  rownames(cor.mat)[5:6] = c('PC2', 'p')
+  
+  res.cor = psych::corr.test(emo_df[, "adjPC2"],
+                             emo_df[, rois], 
+                             adjust='fdr')
+  cor.mat = rbind(cor.mat,
+                  res.cor$r[1,], 
+                  res.cor$p.adj[1,])
+  
+  rownames(cor.mat)[7:8] = c('adj PC2', 'p')
+  
+  res.cor = psych::corr.test(emo_df[, "PC3"],
+                             emo_df[, rois], 
+                             adjust='fdr')
+  
+  cor.mat = rbind(cor.mat,
+                  res.cor$r[1,], 
+                  res.cor$p.adj[1,])
+  
+  rownames(cor.mat)[9:10] = c('PC3', 'p')
+  
+  res.cor = psych::corr.test(emo_df[, "adjPC3"],
+                             emo_df[, rois], 
+                             adjust='fdr')
+  cor.mat = rbind(cor.mat,
+                  res.cor$r[1,], 
+                  res.cor$p.adj[1,])
+  
+  rownames(cor.mat)[11:12] = c('adj PC3', 'p')
+  
+  res.cor = psych::corr.test(emo_df[, "PC4"],
+                             emo_df[, rois], 
+                             adjust='fdr')
+  
+  cor.mat = rbind(cor.mat,
+                  res.cor$r[1,], 
+                  res.cor$p.adj[1,])
+  
+  rownames(cor.mat)[13:14] = c('PC4', 'p')
+  
+  res.cor = psych::corr.test(emo_df[, "adjPC4"],
+                             emo_df[, rois], 
+                             adjust='fdr')
+  cor.mat = rbind(cor.mat,
+                  res.cor$r[1,], 
+                  res.cor$p.adj[1,])
+  
+  rownames(cor.mat)[15:16] = c('adj PC4', 'p')
+  
+  return(cor.mat)
+}
+cor.mat = cor_adjpc(emo_df, rois)
+# cor_pc2(emo_df, rois)
+# cor.mat %>% t() %>% kable(format = 'html') %>%  kable_styling("striped", full_width = TRUE)
+# sig.emotrics = names(which(cor.mat[2,] < .05))
+
+cor.mat = kable(cor.mat %>% t(),
+                booktabs = T,  
+                align = c(rep('c', 6))) %>%
+  kable_classic(full_width = F, 
+                html_font = "Cambria", 
+                font_size =10) %>%
+  kable_styling(latex_options = "HOLD_position",) %>%
+  footnote(general = "",
+           general_title = "Correlation between adjusted PCs and raw Emotrics measurements.")
+
+save_kable(cor.mat, 
+           file = file.path(project, 
+                            'tables',
+                            'correlation_between_adjusted_PCs_and_emotrics.html'))
+webshot::webshot(file.path(project, 
+                           'tables',
+                           'correlation_between_adjusted_PCs_and_emotrics.html'), 
+                 file.path(project, 
+                           'tables', 
+                           'correlation_between_adjusted_PCs_and_emotrics.pdf'))
+
+cor.mat
+```
+
+### Plot MRD1 for CR, SZ, 22q+ and 22q-, TD
+
+```{r}
+mrd1_pc2_df = emo_df %>% select(bbl_id, group, PS, Marginal_Reflex_Distance_1, PC2)
+mrd1_pc2_df = mrd1_pc2_df %>% filter(!(group == '22q' & is.na(PS)))
+mrd1_pc2_df = mrd1_pc2_df %>%
+  dplyr::mutate(group = sapply(bbl_id, 
+                        function(x) {
+                          if (mrd1_pc2_df$group[mrd1_pc2_df$bbl_id == x] == 'PS') {
+                            group = sz_cr$group[sz_cr$bbl_id == x]
+                          } else if (mrd1_pc2_df$group[mrd1_pc2_df$bbl_id == x] == 'TD') {
+                            group = 'TD'
+                          } else if (mrd1_pc2_df$PS[mrd1_pc2_df$bbl_id == x] == 1) {
+                            group = '22q+PS'
+                          } else if (mrd1_pc2_df$PS[mrd1_pc2_df$bbl_id == x] == 0) {
+                            group = '22q-PS'
+                          } else {
+                            group = x
+                          }
+                          return (group)
+                        }) %>% unlist())
+
+ggplot(mrd1_pc2_df,
+       aes(x = group,
+           y = Marginal_Reflex_Distance_1,
+           fill = group)) +
+  geom_boxplot_pattern(pattern_color =  c("black", "black", "black", "black", "sky blue"),
+                       pattern_fill = c("sky blue", "pink", "salmon1", "salmon4", "sky blue"),
+                       pattern_size = 0.000000000001) +
+  scale_fill_manual(values = c("orange", "orange", "pink", "pink", "sky blue"), guide = 'none') +
+  ggtitle('Marginal Reflex Distance 1') +
+  theme_light() +
+  theme(plot.title = element_text(hjust = 0.5, size=15),
+        axis.title.x = element_blank(),
+        axis.title.y = element_blank(),
+        axis.text.x = element_text(size = 13)) +
+  theme(legend.position = "none")
+```
+
+### Plot PC2 for CR, SZ, 22q+ and 22q-, TD
+
+```{r}
+ggplot(mrd1_pc2_df,
+       aes(x = group,
+           y = PC2,
+           fill = group)) +
+  geom_boxplot_pattern(pattern_color =  c("black", "black", "black", "black", "sky blue"),
+                       pattern_fill = c("sky blue", "pink", "salmon1", "salmon4", "sky blue"),
+                       pattern_size = 0.000000000001) +
+  scale_fill_manual(values = c("orange", "orange", "pink", "pink", "sky blue"), guide = 'none') +
+  ggtitle("PC2") +
+  theme_light() +
+  theme(plot.title = element_text(hjust = 0.5, size=15),
+        axis.title.x = element_blank(),
+        axis.title.y = element_blank(),
+        axis.text.x = element_text(size = 13)) +
+  theme(legend.position = "none")
+```
+
+
+## 22q Not used
+
+Brow height, philtrum, marginal reflex distance 1&2 are all correlated with 22q PC2. \
+Philtrum and brow height are correlated with 22q PC3.
+
+```{r}
+cor.mat = cor_pc2(emo_df[emo_df$group == '22q',], rois)
+cor.mat %>% t() %>% kable(format = 'html') %>%  kable_styling("striped", full_width = TRUE)
+sig.emotrics = names(which(cor.mat[2,] < .05))
+
+cor.mat = kable(t(cor.mat),
+      booktabs = T,  
+      align = c(rep('c', 6))) %>%
+  kable_classic(full_width = F, 
+                html_font = "Cambria", 
+                font_size =10) %>%
+  kable_styling(latex_options = "HOLD_position",) %>%
+  footnote(general="",
+           general_title = "22q11DS PC and Emotrics correlation")
+
+save_kable(cor.mat, file = file.path(project, 'tables', 
+                                     '22q_pc_emotrics_correlation.html'))
+
+webshot::webshot(file.path(project, 'tables', 
+                           '22q_pc_emotrics_correlation.html'), 
+        file.path(project, 'tables', '22q_pc_emotrics_correlation.pdf'))
+
+cor.mat
+```
+
+## TD Not used
+
+Brow Height is correlated with TD PC3.
+
+```{r}
+cor.mat = cor_pc2(emo_df[emo_df$group == 'TD', ], rois)
+cor.mat %>% t() %>% kable(format = 'html') %>%  kable_styling("striped", full_width = TRUE)
+sig.emotrics = names(which(cor.mat[2,] < .05))
+
+cor.mat = kable(t(cor.mat),
+      booktabs = T,  
+      align = c(rep('c', 6))) %>%
+  kable_classic(full_width = F, 
+                html_font = "Cambria", 
+                font_size =10) %>%
+  kable_styling(latex_options = "HOLD_position",) %>%
+  footnote(general="",
+           general_title = "TD PC and Emotrics correlation")
+
+save_kable(cor.mat, file = file.path(project, 'tables', 
+                                     'td_pc_emotrics_correlation.html'))
+
+webshot::webshot(file.path(project, 'tables', 
+                           'td_pc_emotrics_correlation.html'), 
+        file.path(project, 'tables', 'td_pc_emotrics_correlation.pdf'))
+
+cor.mat
+```
+
+## PS Not used
+
+None of the features are correlated with the PS 22q
+
+```{r}
+cor.mat = cor_pc2(emo_df[emo_df$group == 'PS', ], rois)
+cor.mat %>% t() %>% kable(format = 'html') %>%  kable_styling("striped", full_width = TRUE)
+sig.emotrics = names(which(cor.mat[2,] < .05))
+
+cor.mat = kable(t(cor.mat),
+      booktabs = T,  
+      align = c(rep('c', 6))) %>%
+  kable_classic(full_width = F, 
+                html_font = "Cambria", 
+                font_size =10) %>%
+  kable_styling(latex_options = "HOLD_position",) %>%
+  footnote(general="",
+           general_title = "PS PC and Emotrics correlation")
+
+save_kable(cor.mat, file = file.path(project, 'tables', 
+                                     'ps_pc_emotrics_correlation.html'))
+
+webshot::webshot(file.path(project, 'tables', 
+                           'ps_pc_emotrics_correlation.html'), 
+        file.path(project, 'tables', 'ps_pc_emotrics_correlation.pdf'))
+
+cor.mat
+```
+
+
+# Correlate the 22q PCs and projected PCs with demographics
+
+## TD
+
+IQ and MMSE are not correlated with TD PCs.
+
+```{r}
+iq = c("VIQ", "PIQ", "FSIQ", "MMSE")
+cor.mat = cor_pc2(emo_df[emo_df$group == 'TD', ], iq)
+cor.mat %>% 
+  t() %>% 
+  kable(format = 'html') %>%  
+  kable_styling("striped", full_width = TRUE)
+
+sig.emotrics = names(which(cor.mat[2,] < .05))
+```
+
+## PS
+
+IQ and MMSE not correlated with PS PCs.
+
+```{r}
+cor.mat = cor_pc2(emo_df[emo_df$group == 'PS', ], iq)
+cor.mat %>% 
+  t() %>% 
+  kable(format = 'html') %>%  
+  kable_styling("striped", full_width = TRUE)
+
+sig.emotrics = names(which(cor.mat[2,] < .05))
+```
+
+## 22q
+
+FSIQ is not correlated with 22q PC2, but MMSE is.
+
+```{r}
+iq = c("VIQ", "PIQ", "FSIQ", "MMSE")
+cor.mat = cor_pc2(emo_df[emo_df$group == '22q', ], iq)
+cor.mat %>% 
+  t() %>% 
+  kable(format = 'html') %>%  
+  kable_styling("striped", full_width = TRUE)
+
+sig.emotrics = names(which(cor.mat[2,] < .05))
+```
+
+# Predicting PS status
+
+## Predicting PS status based on 22q-like PCs
+
+#plot ROC function (not used)
+```{r}
+plotROCs = function(roc1, roc2, roc3, roc4, main, legends){
+  plot(roc1, col="palevioletred1", main=main)
+  plot(roc2, col="plum", add=TRUE)
+  plot(roc3, col="pink", add=TRUE)
+  plot(roc4, col="orange", add=TRUE)
+  
+  AUC = c(round(as.vector(roc1$auc), 2),
+          round(as.vector(roc2$auc), 2),
+          round(as.vector(roc3$auc), 2),
+          round(as.vector(roc4$auc), 2))
+  
+  
+  legend("bottomright", 
+    legend = paste0(legends, " (", AUC, ")"),
+    col = c("palevioletred1", "plum", "pink", "orange"), 
+    pch = c(17,19, 19), 
+    pt.cex = 1, 
+    cex = 1, 
+    text.col = "black", 
+    inset = c(0.1, 0.1))
+}
+```
+#Set up DFs for use in ROC analyses
+```{r}
+q_td = emo_df %>%
+  filter(group != 'PS') %>%
+  mutate(group = relevel(factor(group), 'TD'))
+
+ps_td = emo_df %>% 
+  filter(group != '22q')
+ps_td = merge(sz_cr %>%
+                mutate(group2 = group) %>%
+                select(bbl_id, group2),
+              ps_td)
+ps_td$group = relevel(factor(ps_td$group), 'TD')
+
+sz_td = ps_td %>%
+  filter(group2 != 'CR') %>%
+  mutate(group = relevel(factor(group2), 'TD')) %>%
+  select(!group2)
+
+cr_td = ps_td %>%
+  filter(group2 != 'SZ') %>%
+  mutate(group = relevel(factor(group2), 'TD')) %>%
+  select(!group2)
+```
+
+##This is what is used in the paper
+## Step wise process to build best model
+#1 Univariate analysis
+```{r}
+univariable.age<-glm(group~age,family="binomial", data=ps_td)
+summary(univariable.age)
+univariable.sex<-glm(group~sex,family="binomial", data=ps_td)
+summary(univariable.sex)
+univaraible.race2<-glm(group~race2,family="binomial", data=ps_td)
+summary(univaraible.race2)
+univariable.philtrum<-glm(group~Philtrum,family="binomial", data=ps_td)
+summary(univariable.philtrum)
+univariable.mrd1<-glm(group~Marginal_Reflex_Distance_1,family="binomial", data=ps_td)
+summary(univariable.mrd1)
+univariable.mrd2<-glm(group~Marginal_Reflex_Distance_2,family="binomial", data=ps_td)
+summary(univariable.mrd2)
+univariable.bh<-glm(group~Brow_Height,family="binomial", data=ps_td)
+summary(univariable.bh)
+univariable.pc1<-glm(group~PC1,family="binomial", data=ps_td)
+summary(univariable.pc1)
+univariable.pc2<-glm(group~PC2,family="binomial", data=ps_td)
+summary(univariable.pc2)
+univariable.pc3<-glm(group~PC3,family="binomial", data=ps_td)
+summary(univariable.pc3)
+univariable.pc4<-glm(group~PC4,family="binomial", data=ps_td)
+summary(univariable.pc4)
+```
+#2 Pass all univariate to multivariate (p<0.25)
+```{r}
+model1<-glm(group~age+race2+Philtrum+Marginal_Reflex_Distance_1+Marginal_Reflex_Distance_2+PC1+PC2+PC3,family="binomial", data=ps_td)
+summary(model1)
+
+model2<-glm(group~Marginal_Reflex_Distance_1+PC2,family="binomial", data=ps_td)
+summary(model2)
+```
+#compare model 1 and model 2
+```{r}
+delta.coef<-abs((coef(model2)-coef(model1)[c(6,9)])/coef(model1)[c(6,9)])
+round(delta.coef,3)
+
+lrtest(model1, model2)#model 1 vs model two p=0.19; not different
+
+```
+#3 Test interactions
+```{r}
+model.interactions<-glm(group~Marginal_Reflex_Distance_1+PC2+Marginal_Reflex_Distance_1:PC2,family="binomial", data=ps_td)
+summary(model.interactions)
+
+lrtest(model2,model.interactions)#interaction effect not signifiance (p=0.17); drop interaction term; stick with model2 
+```
+#goodness of fit b/w model and fitted 
+```{r}
+hoslem.test(model2$y, fitted(model2)) #model and fitted do not significantly differ (p=.08)
+```
+#Plot ROC
+```{r}
+Predprob<-predict(model2, type="response")
+library(Deducer)
+a<-rocplot(model2,diag=TRUE,pred.prob.labels=FALSE, prob.label.digits=3, AUC=TRUE)
+
+ps_td$TDorNot<-0
+ps_td$TDorNot[ps_td$group=="PS"]<-1
+n<-nrow(ps_td)
+predict.bothLONG<-matrix(NA,nrow=n, ncol=2, byrow = FALSE)
+bothLONG_glm<- multinom(group ~ Marginal_Reflex_Distance_1 + PC2, data=ps_td)
+predict.bothLONG<-predict(bothLONG_glm, newdata=ps_td, type='probs')
+roc_bothLONG_glm<- roc(response=ps_td$TDorNot, predictor=Predprob, levels=c(0,1), auc=TRUE, ci=TRUE, plot.roc=TRUE)
+auc_bothLONGR<- lapply((auc(roc_bothLONG_glm)),round,2)
+auc_bothLONG <- as.numeric(auc_bothLONGR) #0.78
+ci_bothLONG<- ci.auc(roc_bothLONG_glm) #0.69-0.85
+
+result.coords5 <- lapply(coords(roc_bothLONG_glm, "best", best.method="closest.topleft", ret=c("threshold", "accuracy", "sensitivity","specificity")), round, 2)
+#result.coords5 <- lapply(result.coords5, round, 3)
+both_thresh <- result.coords5$threshold
+both_sens <- result.coords5$sensitivity #0.62
+both_spec <- result.coords5$specificity #0.85
+
+
+#plot all ROC
+pdf(file=file.path(manuscript_out, 'ROC_PS_TD.pdf'))
+plot(roc_bothLONG_glm, col="black",lwd=3, print.thres.adj=c(1,-1),print.thres.best.method="closest.topleft")
+plot(ci.sp(roc_bothLONG_glm, sensitivities=seq(0, 1, .01)), pch = 21:25, type="shape", border= "pink", col="pink")
+lines(roc_bothLONG_glm,col="black")
+
+legend(.6, .4, legend=c("MRD1 + PC2"),
+       col=c("black"), cex=.8,lty=1:1,lwd=2, y.intersp = 1, bty = "n")
+dev.off()
+
+```
+
+```{r}
+#leave one out test
+loo.log = function(df, predictors = emotrics){ # Leave one out logistic regression with emotrics as predictor
+  df$group = as.numeric(df$group != 'TD')
+  frmla = as.formula(sprintf("group ~ %s", paste(predictors, collapse=" + ")))
+  preds = c()
+  for (i in 1:nrow(df)){ ## Leave one out CV
+    train_df <- df[-i, ]
+    test_df <- df[i, ]
+    glm.fit <- glm(frmla, family='binomial', data=train_df)
+    preds[i] <- predict(glm.fit, test_df)
+    # res = train(form = frmla, data = df,
+    #       trControl = trainControl(method = "LOOCV"),
+    #       method = "glm", family = "binomial")
+    # tmp_df = df[-i,]
+    # glm(frmla, family='binomial', data=tmp_df)$fitted.values
+  }
+  return(preds)
+}
+ps_td$reslog = loo.log(ps_td, c('Marginal_Reflex_Distance_1', 'adjPC2'))
+resROC_main_ps = roc(group ~ reslog, data=ps_td)
+ci_resROC.loo<- ci.auc(resROC_main_ps) #0.64-0.82
+result.coords6 <- lapply(coords(resROC_main_ps, "best", best.method="closest.topleft", ret=c("threshold", "accuracy", "sensitivity","specificity")), round, 2)
+#result.coords5 <- lapply(result.coords5, round, 3)
+both_thresh <- result.coords6$threshold
+both_sens <- result.coords6$sensitivity #0.66
+both_spec <- result.coords6$specificity #0.79
+#plot all ROC
+pdf(file=file.path(manuscript_out, 'ROC_PS_TD-loo.pdf'))
+plot(resROC_main_ps, col="black",lwd=3, print.thres.adj=c(1,-1),print.thres.best.method="closest.topleft")
+plot(ci.sp(resROC_main_ps, sensitivities=seq(0, 1, .01)), pch = 21:25, type="shape", border= "pink", col="pink")
+lines(resROC_main_ps,col="black")
+legend(.6, .4, legend=c("MRD1 + PC2"),
+       col=c("black"), cex=.8,lty=1:1,lwd=2, y.intersp = 1, bty = "n")
+dev.off()
+#compare leave one out model with model2
+roc.test(roc_bothLONG_glm,resROC_main_ps
+         )
+```
+
+
+
+# Exploratory PS & TD PCA
+
+## PCA on PS and TD without 22q11.2DS gestalt score
+```{r}
+penn_df = df%>%
+  filter(!is.na(age))%>%
+  filter(group != '22q')
+
+ps_td_pca = penn_df %>%
+  dplyr::select(colnames(penn_df)[which(colnames(penn_df) == '22q11.2 deletion syndrome'):ncol(penn_df)]) %>%
+  dplyr::select(! `22q11.2 deletion syndrome`) %>%
+  PCA(scale.unit = FALSE, graph = FALSE)
+
+
+fviz_screeplot(ps_td_pca) + theme(plot.title = element_text(hjust = 0.5))
+```
+
+#### PC1
+
+```{r}
+plot_loading(ps_td_pca, dim=1) +
+  theme_light() +
+  theme(axis.text.y = element_text(size = 13),
+        axis.text.x = element_text(size = 13),
+        axis.title.x = element_text(size = 13),
+        axis.title.y = element_blank(),
+        plot.title = element_text(size = 15, hjust = 0.5))
+```
+
+
+#### PC2
+
+```{r}
+plot_loading(ps_td_pca, dim=2) +
+  theme_light() +
+  theme(axis.text.y = element_text(size = 13),
+        axis.text.x = element_text(size = 13),
+        axis.title.x = element_text(size = 13),
+        axis.title.y = element_blank(),
+        plot.title = element_text(size = 15, hjust = 0.5))
+```
+
+#### PC3
+
+```{r}
+plot_loading(ps_td_pca, dim=3) +
+  theme_light() +
+  theme(axis.text.y = element_text(size = 13),
+        axis.text.x = element_text(size = 13),
+        axis.title.x = element_text(size = 13),
+        axis.title.y = element_blank(),
+        plot.title = element_text(size = 15, hjust = 0.5))
+```
+
+
+#### PC4
+
+```{r}
+plot_loading(ps_td_pca, dim=4) +
+  theme_light() +
+  theme(axis.text.y = element_text(size = 13),
+        axis.text.x = element_text(size = 13),
+        axis.title.x = element_text(size = 13),
+        axis.title.y = element_blank(),
+        plot.title = element_text(size = 15, hjust = 0.5))
+```
+
+
+### Projection of PC 1
+
+Significant differences PS and TD.
+
+```{r}
+PC1 = weigh_scores(penn_df, get_loadings(ps_td_pca, 1))
+TD = ps_td$group == "TD"
+PS = ps_td$group == "PS"
+
+res.t.test = t.test(PC1[TD], PC1[PS])
+names(res.t.test$estimate) = c("mean of TD", "mean of PS")
+res.t.test
+```
+
+
+### PC 2
+
+PC2 shows significant differences PS and TD.
+
+```{r}
+PC2 = weigh_scores(penn_df, get_loadings(ps_td_pca, 2))
+
+res.t.test = t.test(PC2[TD], PC2[PS])
+names(res.t.test$estimate) = c("mean of TD", "mean of PS")
+res.t.test
+```
+
+### PC 3
+
+PC3 shows no difference between TD and PS groups.
+
+```{r}
+PC3 = weigh_scores(penn_df, get_loadings(ps_td_pca, 3))
+
+res.t.test = t.test(PC3[TD], PC3[PS])
+names(res.t.test$estimate) = c("mean of TD", "mean of PS")
+res.t.test
+```
+
+
+### PC 4
+
+PC4 shows no difference between TD and PS groups.
+
+```{r}
+PC4 = weigh_scores(penn_df, get_loadings(ps_td_pca, 4))
+
+res.t.test = t.test(PC4[TD], PC4[PS])
+names(res.t.test$estimate) = c("mean of TD", "mean of PS")
+res.t.test
+```
+
+
+### Group difference Projected PC 1,2, 3, & 4 with age and sex accounted for (PC# ~ group + age + sex)
+
+```{r}
+adjusted_pstd_PC = data.frame(group = factor(penn_df$group),
+                              age = penn_df$age,
+                              sex = penn_df$sex,
+                              race2 = penn_df$race2,
+                              PC1 = weigh_scores(penn_df, get_loadings(ps_td_pca, 1)),
+                              PC2 = weigh_scores(penn_df, get_loadings(ps_td_pca, 2)),
+                              PC3 = weigh_scores(penn_df, get_loadings(ps_td_pca, 3)),
+                              PC4 = weigh_scores(penn_df, get_loadings(ps_td_pca, 4))) %>%
+  drop_na()
+
+```
+
+#### PC1
+
+```{r}
+fit<-(lm(PC1 ~ group + age + sex +race2, adjusted_pstd_PC))
+Anova(fit, type="III")
+```
+
+#### PC2
+
+```{r}
+fit<-(lm(PC2 ~ group + age + sex +race2, adjusted_pstd_PC))
+Anova(fit, type="III")
+```
+
+
+#### PC3
+
+```{r}
+fit<-(lm(PC3 ~ group + age + sex+ race2, adjusted_pstd_PC))
+Anova(fit, type="III")
+```
+
+
+#### PC4
+
+```{r}
+fit<-(lm(PC4 ~ group + age + sex +race2, adjusted_pstd_PC))
+Anova(fit, type="III")
+```
+
+
+### Group difference Projected PC 1,2, 3, & 4 with age and sex accounted for (taking residuals of linear model)
+
+#### PC1
+```{r}
+adjusted_pstd_PC$corrected_PC1 = residuals(lm(adjusted_pstd_PC$PC1 ~ adjusted_pstd_PC$age + adjusted_pstd_PC$sex +adjusted_pstd_PC$race2))
+adjusted_pstd_PC$corrected_PC2 = residuals(lm(adjusted_pstd_PC$PC2 ~ adjusted_pstd_PC$age + adjusted_pstd_PC$sex+adjusted_pstd_PC$race2))
+adjusted_pstd_PC$corrected_PC3 = residuals(lm(adjusted_pstd_PC$PC3 ~ adjusted_pstd_PC$age + adjusted_pstd_PC$sex+adjusted_pstd_PC$race2))
+adjusted_pstd_PC$corrected_PC4 = residuals(lm(adjusted_pstd_PC$PC4 ~ adjusted_pstd_PC$age + adjusted_pstd_PC$sex+adjusted_pstd_PC$race2))
+
+fit<-(lm(corrected_PC1 ~ group + age + sex +race2, adjusted_pstd_PC))
+Anova(fit, type="III")
+```
+
+
+```{r}
+corrected_TD = adjusted_pstd_PC$group == "TD"
+corrected_PS = adjusted_pstd_PC$group == "PS"
+
+res.t.test = t.test(adjusted_pstd_PC$corrected_PC1[corrected_TD], 
+                    adjusted_pstd_PC$corrected_PC1[corrected_PS])
+names(res.t.test$estimate) = c("mean of TD", "mean of PS")
+res.t.test
+```
+
+#### PC2
+
+```{r}
+fit<-(lm(corrected_PC2 ~ group + age + sex + race2, adjusted_pstd_PC))
+Anova(fit, type="III")
+
+res.t.test = t.test(adjusted_pstd_PC$corrected_PC2[corrected_TD], 
+                    adjusted_pstd_PC$corrected_PC2[corrected_PS])
+names(res.t.test$estimate) = c("mean of TD", "mean of PS")
+res.t.test
+```
+
+#### PC3
+
+```{r}
+fit<-(lm(corrected_PC3 ~ group + age + sex + race2, adjusted_pstd_PC))
+Anova(fit,type="III")
+
+res.t.test = t.test(adjusted_pstd_PC$corrected_PC3[corrected_TD], 
+                    adjusted_pstd_PC$corrected_PC3[corrected_PS])
+names(res.t.test$estimate) = c("mean of TD", "mean of PS")
+res.t.test
+```
+
+#### PC4
+
+```{r}
+fit<-(lm(corrected_PC4 ~ group + age + sex + race2, adjusted_pstd_PC))
+Anova(fit, type="III")
+
+res.t.test = t.test(adjusted_pstd_PC$corrected_PC4[corrected_TD], 
+                    adjusted_pstd_PC$corrected_PC4[corrected_PS])
+names(res.t.test$estimate) = c("mean of TD", "mean of PS")
+res.t.test
+```
+
+
+### PC1 projected to all groups (22q, PS, TD)
+
+#### ANOVA across all groups
+
+```{r}
+all_groups_adjusted_pstd_PC = data.frame(group = factor(df$group),
+                                         age = df$age,
+                                         sex = df$sex,
+                                         race2 =df$race2,
+                                         PC1 = weigh_scores(df, get_loadings(ps_td_pca, 1)),
+                                         PC2 = weigh_scores(df, get_loadings(ps_td_pca, 2)),
+                                         PC3 = weigh_scores(df, get_loadings(ps_td_pca, 3)),
+                                         PC4 = weigh_scores(df, get_loadings(ps_td_pca, 4))) %>%
+  drop_na()
+
+fit<-(lm(PC1 ~ group + age + sex +race2, data=all_groups_adjusted_pstd_PC))
+Anova(fit, type ="III")
+```
+
+#### TD vs PS
+
+```{r}
+# PS vs TD
+fit<-(lm(PC1 ~ group + age + sex + race2,
+         data = all_groups_adjusted_pstd_PC[all_groups_adjusted_pstd_PC$group != '22q', ]))
+Anova(fit,type="III")
+```
+
+#### PS vs 22q
+
+```{r}
+# 22q and PS
+fit<-(lm(PC1 ~ group + age + sex + race2,
+         data = all_groups_adjusted_pstd_PC[all_groups_adjusted_pstd_PC$group != 'TD', ]))
+Anova(fit,type="III")
+```
+
+#### TD vs 22q
+
+```{r}
+# 22q and TD
+fit<-(lm(PC1 ~ group + age + sex + race2,
+         data = all_groups_adjusted_pstd_PC[all_groups_adjusted_pstd_PC$group != 'PS', ]))
+Anova(fit,type="III")
+```
+
+
+### PC2 projected to all groups
+
+#### ANOVA across all three groups
+
+```{r}
+fit<-(lm(PC2 ~ group + age + sex +race2, data=all_groups_adjusted_pstd_PC))
+Anova(fit,type="III")
+```
+
+
+#### TD vs PS
+
+```{r}
+# PS vs TD
+fit<-(lm(PC2 ~ group + age + sex,
+         data = all_groups_adjusted_pstd_PC[all_groups_adjusted_pstd_PC$group != '22q', ]))
+Anova(fit,type="III")
+```
+
+#### PS vs 22q
+
+```{r}
+# 22q and PS
+fit<-(lm(PC2 ~ group + age + sex +race2,
+         data = all_groups_adjusted_pstd_PC[all_groups_adjusted_pstd_PC$group != 'TD', ]))
+Anova(fit,type="III")
+```
+
+#### TD vs 22q
+
+```{r}
+# 22q and TD
+fit<-(lm(PC2 ~ group + age + sex +race2,
+         data = all_groups_adjusted_pstd_PC[all_groups_adjusted_pstd_PC$group != 'PS', ]))
+Anova(fit,type="III")
+```
